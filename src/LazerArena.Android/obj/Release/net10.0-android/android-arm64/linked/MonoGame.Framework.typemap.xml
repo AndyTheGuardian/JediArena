@@ -1,0 +1,10 @@
+<api type="release" assembly-name="MonoGame.Framework" mvid="197ada0759f44719bfe5ea35e14ca6a2">
+  <module assembly-name="MonoGame.Framework" mvid="197ada0759f44719bfe5ea35e14ca6a2" mvid-bytes="B9p6GfRZGUe/5eo14Uymog==">
+    <types-scratch>
+      <entry key="crc64493ac3851fab1842/AndroidGameActivity" java-name="crc64493ac3851fab1842/AndroidGameActivity" managed-type-name="Microsoft.Xna.Framework.AndroidGameActivity" token="33554718" />
+      <entry key="crc64493ac3851fab1842/MonoGameAndroidGameView" java-name="crc64493ac3851fab1842/MonoGameAndroidGameView" managed-type-name="Microsoft.Xna.Framework.MonoGameAndroidGameView" token="33554722" />
+      <entry key="crc64493ac3851fab1842/OrientationListener" java-name="crc64493ac3851fab1842/OrientationListener" managed-type-name="Microsoft.Xna.Framework.OrientationListener" token="33554731" />
+      <entry key="crc64493ac3851fab1842/ScreenReceiver" java-name="crc64493ac3851fab1842/ScreenReceiver" managed-type-name="Microsoft.Xna.Framework.ScreenReceiver" token="33554732" />
+    </types-scratch>
+  </module>
+</api>

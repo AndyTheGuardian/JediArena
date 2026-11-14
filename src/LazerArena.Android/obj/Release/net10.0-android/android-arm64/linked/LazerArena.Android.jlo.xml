@@ -1,0 +1,15 @@
+<api>
+  <jcw-types>
+    <type name="Activity1" package="crc64877c2053c119ecaa" application_java_class="android.app.Application" mono_runtime_initialization="mono.MonoPackageManager.LoadApplication (context);" extends_type="crc64493ac3851fab1842.AndroidGameActivity" partial_assembly_qualified_name="LazerArena.Android.Activity1, LazerArena.Android">
+      <constructors>
+        <constructor name="Activity1" method="n_.ctor:()V:" jni_signature="()V" managed_parameters="" retval="void" is_dynamically_registered="True" />
+      </constructors>
+      <methods>
+        <method name="onCreate" method="n_onCreate:(Landroid/os/Bundle;)V:GetOnCreate_Landroid_os_Bundle_Handler" jni_signature="(Landroid/os/Bundle;)V" params="android.os.Bundle p0" retval="void" super_call="p0" activate_call="p0" />
+      </methods>
+    </type>
+  </jcw-types>
+  <acw-types partial-assembly-name="LazerArena.Android" module-name="LazerArena.Android.dll">
+    <type assembly-qualified-name="LazerArena.Android.Activity1, LazerArena.Android, Version=0.7.0.0, Culture=neutral, PublicKeyToken=null" compat-jni-name="lazerarena.android.Activity1" java-key="crc64877c2053c119ecaa.Activity1" managed-key="LazerArena.Android.Activity1" partial-assembly-qualified-name="LazerArena.Android.Activity1, LazerArena.Android" />
+  </acw-types>
+</api>

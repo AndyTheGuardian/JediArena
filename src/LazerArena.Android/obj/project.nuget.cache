@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "dgSpecHash": "dOao5dzSmV4=",
+  "success": true,
+  "projectFilePath": "/home/andy/Claude/JediArena/src/LazerArena.Android/LazerArena.Android.csproj",
+  "expectedPackageFiles": [
+    "/home/andy/.nuget/packages/microsoft.net.illink.tasks/10.0.15/microsoft.net.illink.tasks.10.0.15.nupkg.sha512",
+    "/home/andy/.nuget/packages/monogame.framework.android/3.8.6.1/monogame.framework.android.3.8.6.1.nupkg.sha512",
+    "/home/andy/.nuget/packages/monogame.library.openal/1.24.3.2/monogame.library.openal.1.24.3.2.nupkg.sha512"
+  ],
+  "logs": []
+}

@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LazerArena.Core\LazerArena.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Localization\Strings.*.json" LogicalName="LazerArena.Presentation.Localization.%(Filename).json" WithCulture="false" />
+    <EmbeddedResource Include="Audio\Voice\de\*.wav" LogicalName="LazerArena.Presentation.Voice.de.%(Filename).wav" WithCulture="false" />
+    <EmbeddedResource Include="Audio\Voice\en\*.wav" LogicalName="LazerArena.Presentation.Voice.en.%(Filename).wav" WithCulture="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="LazerArena.Presentation.Tests" />
+  </ItemGroup>
+
+</Project>

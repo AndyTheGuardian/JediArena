@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LazerArena.Android/LazerArena.Android.csproj" />
+    <Project Path="src/LazerArena.Core/LazerArena.Core.csproj" />
+    <Project Path="src/LazerArena.Desktop/LazerArena.Desktop.csproj" />
+    <Project Path="src/LazerArena.Presentation/LazerArena.Presentation.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LazerArena.Core.Tests/LazerArena.Core.Tests.csproj" />
+    <Project Path="tests/LazerArena.Presentation.Tests/LazerArena.Presentation.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/LazerArena.Snapshots/LazerArena.Snapshots.csproj" />
+  </Folder>
+</Solution>

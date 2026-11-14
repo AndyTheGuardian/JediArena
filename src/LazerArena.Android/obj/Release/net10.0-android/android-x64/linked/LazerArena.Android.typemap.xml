@@ -1,0 +1,7 @@
+<api type="release" assembly-name="LazerArena.Android" mvid="c92a062022bc4dc5be6f3fc076aacc09">
+  <module assembly-name="LazerArena.Android" mvid="c92a062022bc4dc5be6f3fc076aacc09" mvid-bytes="IAYqybwixU2+bz/AdqrMCQ==">
+    <types-scratch>
+      <entry key="crc64877c2053c119ecaa/Activity1" java-name="crc64877c2053c119ecaa/Activity1" managed-type-name="LazerArena.Android.Activity1" token="33554450" />
+    </types-scratch>
+  </module>
+</api>
