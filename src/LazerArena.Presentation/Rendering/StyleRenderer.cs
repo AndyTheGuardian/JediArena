@@ -10,16 +10,23 @@ namespace LazerArena.Presentation.Rendering;
 /// Gemeinsamer Ablauf beider Grafikstile (SO-2: Stil aendert nur Darstellung). Die Stile liefern die
 /// Zeichenbausteine; Spielzustand kommt ausschliesslich lesend aus der Simulation.
 /// </summary>
-public abstract class StyleRenderer
+public abstract partial class StyleRenderer
 {
     public abstract GraphicsStyle Style { get; }
 
     // ------------------------------------------------------------------ Spiel
 
-    public void RenderGame(PixelCanvas canvas, ScreenLayout layout, GameSession session, Localizer t, int frame)
+    /// <param name="settings">Aktuelle Einstellungen fuer die Umschaltzeilen des Pausenmenues (OP-17).</param>
+    public void RenderGame(PixelCanvas canvas, ScreenLayout layout, GameSession session, Localizer t, int frame,
+        UserSettings? settings = null)
     {
         var sim = session.Simulation;
+        _pauseSettings = settings;
         CurrentFrame = frame;
+        Bolts = session.Bolts;
+        Look = session.Look;
+        StormActive = sim.Storm.Phase == StormPhase.Active;
+        StormLights = settings?.StormLights ?? true;
         BeginGameFrame(canvas, layout);
         var map = new FieldMapper(layout.Field, sim.Config);
         DrawFieldBackground(canvas, map);
@@ -53,11 +60,14 @@ public abstract class StyleRenderer
 
         if (layout.Orientation == ScreenOrientation.Portrait)
         {
+            // SO-7: Reicht die KI-Stufe oben bis in die Mitte unter die Kamera-Aussparung, steht sie unten
+            bool levelBelow = layout.SafeTop > 0 && !session.TwoPlayers && level.Length > 0 &&
+                layout.TopHud.Width - layout.TopHud.Height - 2 - BitmapFont.MeasureWidth(level) < layout.Width / 2 + layout.SafeTop / 2 + 2;
             var top = new PixelCanvas(layout.TopHud.Width, layout.TopHud.Height);
-            DrawHudBand(top, p2Label, p2Score, PlayerId.Two, pause: !session.TwoPlayers, extra: level);
+            DrawHudBand(top, p2Label, p2Score, PlayerId.Two, pause: !session.TwoPlayers, extra: levelBelow ? "" : level);
             canvas.Blit(top, layout.TopHud.X, layout.TopHud.Y, rotate180: session.TwoPlayers);
             var bottom = new PixelCanvas(layout.BottomHud.Width, layout.BottomHud.Height);
-            DrawHudBand(bottom, t["hud.p1"], p1Score, PlayerId.One, pause: session.TwoPlayers, extra: "");
+            DrawHudBand(bottom, t["hud.p1"], p1Score, PlayerId.One, pause: session.TwoPlayers, extra: levelBelow ? level : "");
             canvas.Blit(bottom, layout.BottomHud.X, layout.BottomHud.Y);
             return;
         }
@@ -83,12 +93,13 @@ public abstract class StyleRenderer
         var sim = session.Simulation;
         if (sim.Paused)
         {
-            DrawPauseMenu(canvas, layout, t);
+            DrawPauseMenu(canvas, layout, t, _pauseSettings ?? new UserSettings { Style = Style });
             return;
         }
         string? text = sim.Phase switch
             {
                 MatchPhase.Countdown => ((int)MathF.Ceiling(sim.PhaseTimeRemaining)).ToString(),
+                MatchPhase.Playing when sim.RoundTime < GoDisplaySeconds => t["hud.go"],   // RS-4: „GO!“ zum Rundenstart
                 MatchPhase.RoundOver => t["hud.hit"],
                 MatchPhase.MatchOver => $"{WinnerLabel(session, t)} {t["hud.wins"]}",
                 _ => null,
@@ -114,7 +125,20 @@ public abstract class StyleRenderer
         int area = layout.Orientation == ScreenOrientation.Landscape ? Math.Min(layout.Width - 20, f.Width * 2 + 40) : f.Width;
         var (w, h, gap) = PauseButtonSize(area);
         int x = f.X + f.Width / 2 - w / 2, y = f.Y + f.Height / 2 + gap;
+        if (layout.Orientation == ScreenOrientation.Landscape) w = (w - gap) / 2;   // rechts daneben: Umschaltzeilen (OP-17)
         return [new IntRect(x, y, w, h), new IntRect(x, y + h + gap, w, h)];
+    }
+
+    /// <summary>OP-17: Umschaltzeilen (Spielmusik, Stimme) unter den beiden Knoepfen des Pausenmenues.</summary>
+    public IReadOnlyList<IntRect> PauseOptionRects(ScreenLayout layout, int count)
+    {
+        var buttons = PauseMenuRects(layout);
+        int gap = buttons[1].Y - buttons[0].Bottom, h = buttons[0].Height;
+        if (layout.Orientation == ScreenOrientation.Landscape)   // Querformat: wenig Hoehe, Zeilen neben den Knoepfen
+            return Enumerable.Range(0, count)
+                .Select(i => new IntRect(buttons[0].Right + gap, buttons[0].Y + i * (h + gap), buttons[0].Width, h)).ToList();
+        return Enumerable.Range(0, count)
+            .Select(i => new IntRect(buttons[1].X, buttons[1].Bottom + 2 * gap + i * (h + gap), buttons[1].Width, h)).ToList();
     }
 
     /// <summary>Groesste Schriftgroesse (hoechstens <paramref name="preferred"/>), bei der der Text in die Breite passt.</summary>
@@ -126,7 +150,8 @@ public abstract class StyleRenderer
     }
 
     protected abstract (int Width, int Height, int Gap) PauseButtonSize(int fieldWidth);
-    protected abstract void DrawPauseMenu(PixelCanvas canvas, ScreenLayout layout, Localizer t);
+    protected abstract void DrawPauseMenu(PixelCanvas canvas, ScreenLayout layout, Localizer t, UserSettings settings);
+    private UserSettings? _pauseSettings;
 
     // ------------------------------------------------------------------ Siegerbildschirm
 
@@ -142,11 +167,20 @@ public abstract class StyleRenderer
 
     public abstract IReadOnlyList<IntRect> OptionRowRects(ScreenLayout layout, int count);
     public abstract IntRect OptionsBackRect(ScreenLayout layout);
-    public abstract void RenderOptions(PixelCanvas canvas, ScreenLayout layout, UserSettings settings, Localizer t, int selected);
+    /// <summary>OP-16: Knopf „Standard“ neben „Zurueck“.</summary>
+    public abstract IntRect OptionsResetRect(ScreenLayout layout);
+    /// <param name="advanced">OP-15: erweiterte Optionen statt der normalen.</param>
+    /// <param name="resetArmed">OP-16: „Standard“ wurde einmal angetippt; der Knopf fragt „Sicher?“.</param>
+    /// <param name="frame">Bildzaehler fuer Animationen (Sternenflug im modernen Stil).</param>
+    public abstract void RenderOptions(PixelCanvas canvas, ScreenLayout layout, UserSettings settings, Localizer t, int selected,
+        bool advanced = false, bool resetArmed = false, int frame = 0);
+
+    protected static IReadOnlyList<OptionEntry> OptionEntries(UserSettings settings, bool advanced) =>
+        advanced ? AdvancedMenu.Entries(settings) : OptionsMenu.Entries(settings);
 
     protected static string[] TitleItems(UserSettings s, Localizer t) =>
     [
-        t["menu.onePlayer"], t["menu.twoPlayers"],
+        t["menu.onePlayer"], t["menu.twoPlayers"], t["menu.tutorial"],
         $"{t["menu.style"]}: {t[s.Style == GraphicsStyle.Classic ? "val.classic" : "val.modern"]}",
         t["menu.options"],
     ];
@@ -173,7 +207,28 @@ public abstract class StyleRenderer
     protected abstract Rgb HintColor { get; }
 
     /// <summary>Bildzaehler des Spielbilds, das gerade gezeichnet wird (fuer Animationen).</summary>
+    /// <summary>OP-14: Blitzform der laufenden Partie (Titel-Demo: gleichmaessig).</summary>
+    protected BoltShape Bolts { get; private set; } = BoltShape.Regular;
+
+    /// <summary>OP-15: Leuchtstaerken der laufenden Partie.</summary>
+    protected AdvancedSettings Look { get; private set; } = AdvancedSettings.Default;
+
     protected int CurrentFrame { get; private set; }
+
+    /// <summary>Anleitung: Schildbloecke, die in der Demo-Szene gerade zerstoert sind (der Kern kennt dafuer keinen Zugriff).</summary>
+    private HashSet<(PlayerId Owner, int Row, int Index)>? _hiddenSegments;
+
+    /// <summary>Ein Schildsegment wird gezeichnet, wenn es lebt und nicht von der Anleitung ausgeblendet ist.</summary>
+    protected bool Visible(ShieldSegment s, PlayerId owner) => s.Alive && _hiddenSegments?.Contains((owner, s.Row, s.Index)) != true;
+
+    /// <summary>Gewitter laeuft (LG-2); Arenen schalten damit z. B. Warnleuchten ein.</summary>
+    protected bool StormActive { get; private set; }
+
+    /// <summary>OP-18: Rundumleuchten eingeschaltet.</summary>
+    protected bool StormLights { get; private set; } = true;
+
+    /// <summary>RS-4: So lange steht „GO!“ nach dem Countdown im Bild, waehrend schon gespielt wird.</summary>
+    public const float GoDisplaySeconds = 0.6f;
 
     /// <summary>Hintergrund eines Spielbilds; Menues nutzen weiterhin <see cref="BeginFrame"/>.</summary>
     protected virtual void BeginGameFrame(PixelCanvas canvas, ScreenLayout layout) => BeginFrame(canvas, layout);

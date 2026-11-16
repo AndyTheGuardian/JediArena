@@ -24,6 +24,9 @@ internal abstract class SnesArena
     /// <summary>Bewegter Bodenanteil, unter Schild, Figuren und Blitzen.</summary>
     public virtual void DrawAnimated(PixelCanvas c, ScreenLayout layout, int frame) { }
 
+    /// <summary>Lichteffekte der Arena fuer das Gewitter (LG-2), ueber dem Boden und unter Schild und Figuren.</summary>
+    public virtual void DrawStormLights(PixelCanvas c, ScreenLayout layout, int frame, bool stormActive) { }
+
     /// <summary>Wirkt nach allem anderen auf das ganze Bild (z. B. Bildzeilen).</summary>
     public virtual void PostProcess(PixelCanvas c, int frame) { }
 
@@ -56,7 +59,20 @@ internal abstract class SnesArena
 internal sealed class SpaceStationArena : SnesArena
 {
     public override ArenaKind Kind => ArenaKind.SpaceStation;
-    public override IReadOnlyList<int> PaletteColors => ArenaPalettes.SpaceStation;
+    public override IReadOnlyList<int> PaletteColors => Palette;
+
+    /// <summary>Abgenommene Palette plus Rottoene fuer die Rundumleuchten (Boden im roten Licht, Kuppeln).</summary>
+    private static readonly int[] Palette = [.. ArenaPalettes.SpaceStation.Union(BeaconReds())];
+
+    private static IEnumerable<int> BeaconReds()
+    {
+        foreach (int r in Enumerable.Range(4, 9).Select(i => i * 0x11))   // 0x44 .. 0xCC
+            foreach (var (g, b) in new[] { (0x22, 0x33), (0x33, 0x44), (0x44, 0x55), (0x55, 0x66) })
+                yield return (r << 16) | (g << 8) | b;
+        int[] dome = [0x661111, 0x881111, 0xAA1111, 0xCC2211, 0xEE3322, 0xFF4433, 0xFF6644, 0xFF7766, 0xFF9988, 0xFFDDCC, 0x992222];
+        foreach (int c in dome) yield return c;
+    }
+
     public override Rgb EmptyPip => C(40, 44, 56);
     public override Rgb Dim => C(220, 226, 240);
     public override Rgb Button => C(70, 76, 92);
@@ -91,6 +107,102 @@ internal sealed class SpaceStationArena : SnesArena
         }
         int my = f.Y + f.Height / 2;
         for (int x = f.X; x < f.Right; x += 8) c.FillRect(x, my - 1, Math.Min(x + 4, f.Right - 1), my, C(90, 200, 120));
+    }
+
+    /// <summary>Frames fuer eine Umdrehung der roten Rundumleuchten (1,6 s bei 60 Bildern/s).</summary>
+    public const int BeaconPeriodFrames = 96;
+
+    /// <summary>So viele Bilder brauchen die Leuchten zum Hochlaufen bzw. Auslaufen (1 s bzw. 1,5 s).</summary>
+    public const int SpinUpFrames = 60, SpinDownFrames = 90;
+
+    private float _spin;        // 0 = steht/aus .. 1 = volle Drehzahl
+    private float _turn;        // Drehwinkel in Umdrehungen
+    private int? _lastFrame;
+
+    /// <summary>Aktuelle Drehzahl 0..1 (fuer Tests).</summary>
+    public float Spin => _spin;
+
+    /// <summary>
+    /// OP-11/OP-18: Vier rote Rundumleuchten in den Ecken, von oben gesehen. Mit dem Gewitter laufen sie sanft
+    /// hoch, danach sanft aus; Licht und Strahlen werden dabei mit der Drehzahl heller bzw. dunkler.
+    /// </summary>
+    public override void DrawStormLights(PixelCanvas c, ScreenLayout layout, int frame, bool stormActive)
+    {
+        int dt = _lastFrame is { } last ? Math.Clamp(frame - last, 0, 10) : 0;
+        _lastFrame = frame;
+        _spin = stormActive ? MathF.Min(1, _spin + dt / (float)SpinUpFrames) : MathF.Max(0, _spin - dt / (float)SpinDownFrames);
+        float eased = _spin * _spin * (3 - 2 * _spin);   // weicher Anfang und weiches Ende der Rampe
+        _turn = (_turn + eased * dt / BeaconPeriodFrames) % 1f;
+        foreach (var (x, y, index) in BeaconPositions(layout))
+        {
+            float angle = (_turn + index * 0.25f) * MathF.Tau;
+            if (eased > 0.01f) DrawBeams(c, layout.Field, x, y, angle, eased);
+            DrawBeacon(c, x, y, angle, eased);
+        }
+    }
+
+    /// <summary>Mitte der Leuchtenkuppel je Ecke, auf den Warnstreifen-Waenden.</summary>
+    public static IEnumerable<(int X, int Y, int Index)> BeaconPositions(ScreenLayout layout)
+    {
+        var f = layout.Field;
+        yield return (f.X - 4, f.Y + 6, 0);
+        yield return (f.Right + 3, f.Y + 6, 1);
+        yield return (f.Right + 3, f.Bottom - 7, 2);
+        yield return (f.X - 4, f.Bottom - 7, 3);
+    }
+
+    private static void DrawBeams(PixelCanvas c, IntRect field, int bx, int by, float angle, float strength)
+    {
+        int reach = (int)(field.Width * 0.5f);
+        const float halfAngle = 0.3f;
+        var light = C(255, 40, 20);
+        for (int y = Math.Max(0, by - reach); y <= Math.Min(c.Height - 1, by + reach); y++)
+            for (int x = Math.Max(field.X - 8, bx - reach); x <= Math.Min(field.Right + 7, bx + reach); x++)
+            {
+                float dx = x - bx, dy = y - by, d = MathF.Sqrt(dx * dx + dy * dy);
+                if (d < 3 || d > reach) continue;
+                float a = MathF.Atan2(dy, dx);
+                // zwei gegenueberliegende Lichtkegel wie bei einer Rundumleuchte
+                float off = MathF.Min(AngleDistance(a, angle), AngleDistance(a, angle + MathF.PI));
+                if (off > halfAngle) continue;
+                float k = (1 - off / halfAngle) * (1 - d / reach);
+                c.AddLight(x, y, light, 0.75f * strength * MathF.Sqrt(k));
+            }
+    }
+
+    private static float AngleDistance(float a, float b)
+    {
+        float d = MathF.Abs((a - b) % MathF.Tau);
+        return d > MathF.PI ? MathF.Tau - d : d;
+    }
+
+    /// <summary>Rundumleuchte von oben: runder Sockel, rote Kuppel, darin der drehende Spiegel mit hellem Lichtfleck.</summary>
+    private static void DrawBeacon(PixelCanvas c, int x, int y, float angle, float strength)
+    {
+        c.FillEllipse(x, y, 5.6f, 5.6f, Outline);                      // Sockelring
+        c.FillEllipse(x, y, 4.8f, 4.8f, C(70, 76, 92));
+        c.EllipseOutline(x, y, 4.8f, 4.8f, C(150, 158, 176), 1);
+        bool on = strength > 0.01f;
+        c.FillEllipse(x, y, 3.6f, 3.6f, Rgb.Lerp(C(102, 17, 17), C(204, 34, 17), strength));   // Kuppel
+        var dir = new Vector2(MathF.Cos(angle), MathF.Sin(angle));
+        if (on)
+        {
+            c.GlowCircle(x, y, 3.5f, C(255, 50, 30), 6, 0.8f * strength);
+            // Spiegel quer, Lichtflecken an beiden Enden in Strahlrichtung
+            c.Line(x - dir.Y * 2.5f, y + dir.X * 2.5f, x + dir.Y * 2.5f, y - dir.X * 2.5f, C(102, 17, 17));
+            foreach (int side in new[] { 1, -1 })
+            {
+                var p = new Vector2(x, y) + dir * side * 2.2f;
+                c.FillRect((int)MathF.Round(p.X) - 1, (int)MathF.Round(p.Y) - 1, (int)MathF.Round(p.X), (int)MathF.Round(p.Y),
+                    Rgb.Lerp(C(153, 34, 34), C(255, 221, 204), strength));
+            }
+            c.Set(x, y, C(255, 119, 102));
+        }
+        else
+        {
+            c.Line(x - dir.Y * 2.5f, y + dir.X * 2.5f, x + dir.Y * 2.5f, y - dir.X * 2.5f, C(68, 17, 17));
+            c.Set(x - 1, y - 1, C(153, 34, 34));
+        }
     }
 
     public override void DrawBar(PixelCanvas bar, bool lineAtBottom)
@@ -326,11 +438,14 @@ internal sealed class EnergyCoreArena : SnesArena
     }
 }
 
-/// <summary>Arena 9 „Hologramm“: gruenes Holo-Gitter, das sehr dezent atmet, Bildzeilen wie auf einem Roehrenfernseher.</summary>
+/// <summary>
+/// Arena 9 „Hologramm“: gruenes Holo-Gitter, Bildzeilen wie auf einem Roehrenfernseher. Das Gitter blendet weich ab und
+/// wird dann Linie fuer Linie neu gezeichnet (senkrecht und waagerecht gleichzeitig, je Linie leicht verzoegert).
+/// </summary>
 internal sealed class HologramArena : SnesArena
 {
     public override ArenaKind Kind => ArenaKind.Hologram;
-    public override IReadOnlyList<int> PaletteColors => ArenaPalettes.Hologram;
+    public override IReadOnlyList<int> PaletteColors => HologramPalette;
     public override Rgb EmptyPip => C(10, 50, 30);
     public override Rgb Dim => C(120, 255, 170);
     public override Rgb Button => C(10, 60, 30);
@@ -351,20 +466,59 @@ internal sealed class HologramArena : SnesArena
         }
     }
 
+    // Ablauf einer Schleife (Bilder bei 60/s): dunkel → Linien werden nacheinander neu gezeichnet → hell halten →
+    // weich abblenden → dunkel halten. Senkrechte und waagerechte Linien laufen gleichzeitig, jede etwas verzoegert.
+    public const int GridStep = 16, DrawStart = 30, LineDelay = 5, DrawFrames = 40, HoldUntil = 300, FadeFrames = 100, CycleFrames = 450;
+    public const float LowLevel = 0.2f, FullLevel = 0.7f;
+    private static readonly float[,] Bayer = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } };
+
+    /// <summary>Gruene Helligkeitsstufen des Gitters (12-Bit-Farben, dunkel → hell); in der Palette enthalten.</summary>
+    public static readonly int[] GridRamp =
+        [.. Enumerable.Range(2, 9).Select(k => ((k >= 4 ? 0x11 : 0) << 16) | ((k * 0x11) << 8) | (int)MathF.Round(k * 0x11 * 0.58f / 17) * 17)];
+
+    private static readonly int[] HologramPalette = [.. ArenaPalettes.Hologram.Union(GridRamp)];
+
+    /// <summary>
+    /// Helligkeit (0..1) eines Gitterpunkts: <paramref name="index"/> = Nummer der Linie, <paramref name="along"/> =
+    /// Anteil der Linienlaenge vom Linienanfang. Liefert zusaetzlich, ob der Punkt zum hellen Zeichenkopf gehoert.
+    /// </summary>
+    public static (float Level, bool Head) GridLevel(int frame, int index, float along)
+    {
+        int t = ((frame % CycleFrames) + CycleFrames) % CycleFrames;
+        if (t >= HoldUntil)   // weiches Abblenden (Smoothstep), dann dunkel halten
+        {
+            float k = MathF.Min(1, (t - HoldUntil) / (float)FadeFrames);
+            return (FullLevel + (LowLevel - FullLevel) * k * k * (3 - 2 * k), false);
+        }
+        float p = (t - DrawStart - index * LineDelay) / (float)DrawFrames;   // Zeichenfortschritt dieser Linie
+        if (p <= 0) return (LowLevel, false);
+        if (along > p) return (LowLevel, false);
+        return (FullLevel, p < 1 && p - along < 0.025f);
+    }
+
     public override void DrawAnimated(PixelCanvas c, ScreenLayout layout, int frame)
     {
         var f = layout.Field;
-        float breath = 0.5f + 0.5f * MathF.Sin(frame * MathF.Tau / 120f);   // 2 s je Atemzug
-        var grid = Rgb.Lerp(C(12, 66, 38), C(16, 82, 48), breath);
-        for (int x = f.X; x < f.Right; x += 16)
-        {
-            c.BlendRect(x - 1, f.Y, x - 1, f.Bottom - 1, grid, 0.07f * breath);
-            c.BlendRect(x + 1, f.Y, x + 1, f.Bottom - 1, grid, 0.07f * breath);
-            c.FillRect(x, f.Y, x, f.Bottom - 1, grid);
-        }
-        for (int y = f.Y; y < f.Bottom; y += 16) c.FillRect(f.X, y, f.Right - 1, y, grid);
+        var head = C(119, 255, 170);
+        for (int i = 0, x = f.X; x < f.Right; i++, x += GridStep)
+            for (int y = f.Y; y < f.Bottom; y++)
+                Plot(c, x, y, GridLevel(frame, i, (y - f.Y) / (float)f.Height), head);
+        for (int j = 0, y = f.Y; y < f.Bottom; j++, y += GridStep)
+            for (int x = f.X; x < f.Right; x++)
+                Plot(c, x, y, GridLevel(frame, j, (x - f.X) / (float)f.Width), head);
         int my = f.Y + f.Height / 2;
         c.FillRect(f.X, my, f.Right - 1, my, C(60, 220, 120));
+    }
+
+    /// <summary>Zwischenstufen der Helligkeit per geordnetem Dithering zwischen zwei Rampenfarben (weicher Verlauf trotz 12 Bit).</summary>
+    private static void Plot(PixelCanvas c, int x, int y, (float Level, bool Head) p, Rgb head)
+    {
+        if (p.Head) { c.Set(x, y, head); return; }
+        float pos = Math.Clamp(p.Level, 0, 1) * (GridRamp.Length - 1);
+        int lo = (int)pos;
+        int pick = pos - lo > (Bayer[y & 3, x & 3] + 0.5f) / 16f ? Math.Min(lo + 1, GridRamp.Length - 1) : lo;
+        int v = GridRamp[pick];
+        c.Set(x, y, C((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF));
     }
 
     public override void PostProcess(PixelCanvas c, int frame)

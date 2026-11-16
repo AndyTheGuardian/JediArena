@@ -1,3 +1,0 @@
-drawable/icon_background;drawable/icon_background
-mipmap/icon;mipmap/icon
-values/strings;values/Strings

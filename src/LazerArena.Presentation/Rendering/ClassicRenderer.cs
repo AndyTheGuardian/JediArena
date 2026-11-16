@@ -31,14 +31,52 @@ public sealed class ClassicRenderer : StyleRenderer
         for (int x = f.X; x < f.Right; x += 4) canvas.Set(x, laneY, P.Lane);
     }
 
+    /// <summary>
+    /// OP-6: Alle Bloecke gleich gross im Seitenverhaeltnis 3:1, mit 1 Pixel Fuge gleichmaessig ueber die Feldbreite
+    /// verteilt; zwischen den geraden Reihen liegt eine Fuge von einer ganzen Blockhoehe (Entwurf 2, V1.1).
+    /// Reine Darstellung: die Trefferflaechen im Kern bleiben unveraendert.
+    /// </summary>
     protected override void DrawShield(PixelCanvas canvas, FieldMapper map, Shield shield, PlayerId owner)
     {
         var (color, dark) = owner == PlayerId.One ? (P.P1, P.P1Dark) : (P.P2, P.P2Dark);
-        foreach (var s in shield.Segments.Where(s => s.Alive))
+        foreach (var (s, (x0, y0, x1, y1)) in ShieldBlocks(map, shield))
+            if (Visible(s, owner)) canvas.FillRect(x0, y0, x1, y1, s.Row == 0 ? color : dark);
+    }
+
+    /// <summary>Bildschirmrechtecke (inklusive) der Schildbloecke: Breite ein Vielfaches von 3, Hoehe ein Drittel davon.</summary>
+    public static IReadOnlyList<(ShieldSegment Segment, (int X0, int Y0, int X1, int Y1) Rect)> ShieldBlocks(FieldMapper map, Shield shield)
+    {
+        var segments = shield.Segments;
+        int count = segments.Max(s => s.Index) + 1;
+        int width = Math.Max(3, (map.Field.Width - (count - 1)) / count / 3 * 3);   // groesstes Vielfaches von 3, das passt
+        int height = width / 3;
+        int pitch = width + 1;
+        int gap = height;                                                          // Reihenfuge = Blockhoehe
+        int left = map.Field.X + (map.Field.Width - (count * pitch - 1)) / 2;
+        bool straight = segments.All(s => MathF.Abs(s.Bounds.Top - segments.First(o => o.Row == s.Row).Bounds.Top) < 0.001f);
+
+        float pairCenter = segments.Average(s => (s.Bounds.Top + s.Bounds.Bottom) / 2) * map.ScaleY + map.Field.Y;
+        bool frontAbove = segments.First(s => s.Row == 0).Bounds.Top < segments.First(s => s.Row == 1).Bounds.Top;
+        int pairTop = (int)MathF.Round(pairCenter - (2 * height + gap) / 2f);
+
+        var result = new List<(ShieldSegment, (int, int, int, int))>(segments.Count);
+        foreach (var s in segments)
         {
-            var (x0, y0, x1, y1) = map.ToScreen(s.Bounds);
-            canvas.FillRect(x0, y0, x1 - 1, y1, s.Row == 0 ? color : dark);   // 1 Pixel Fuge (nur Grafik, A5)
+            int x0, y0;
+            if (straight)
+            {
+                x0 = left + s.Index * pitch;
+                y0 = (s.Row == 0) == frontAbove ? pairTop : pairTop + height + gap;
+            }
+            else
+            {
+                var b = s.Bounds;
+                x0 = (int)MathF.Round(map.Field.X + (b.Left + b.Right) / 2 * map.ScaleX - width / 2f);
+                y0 = (int)MathF.Round(map.Field.Y + (b.Top + b.Bottom) / 2 * map.ScaleY - height / 2f);
+            }
+            result.Add((s, (x0, y0, x0 + width - 1, y0 + height - 1)));
         }
+        return result;
     }
 
     protected override void DrawPlayer(PixelCanvas canvas, FieldMapper map, Player player, GameConfig config)
@@ -54,7 +92,7 @@ public sealed class ClassicRenderer : StyleRenderer
     protected override void DrawBolt(PixelCanvas canvas, IReadOnlyList<Vector2> path, BoltOwner owner, bool docked, int seed)
     {
         var color = Team(owner);
-        canvas.Polyline(Zigzag.Along(path, 4, docked ? 2.3f : 2f, seed), color);   // 10 % kleiner
+        canvas.Polyline(Zigzag.Along(path, 4, docked ? 2.3f : 2f, seed, irregular: Bolts == BoltShape.Lightning), color);   // OP-14
         if (!docked) return;
         var tip = path[^1];
         canvas.FillRect((int)tip.X - 1, (int)tip.Y - 1, (int)tip.X + 1, (int)tip.Y + 1, color);
@@ -118,15 +156,42 @@ public sealed class ClassicRenderer : StyleRenderer
         if (twoPlayers) canvas.Blit(box, f.X, my - 10 - box.Height, rotate180: true);
     }
 
+    protected override void DrawTutorialFrame(PixelCanvas canvas, IntRect scene)
+    {
+        canvas.FillRect(scene.X - 2, scene.Y, scene.X - 1, scene.Bottom - 1, P.Wall);
+        canvas.FillRect(scene.Right, scene.Y, scene.Right + 1, scene.Bottom - 1, P.Wall);
+    }
+
+    protected override void DrawTutorialButton(PixelCanvas canvas, IntRect r, string text, bool primary)
+    {
+        canvas.RectOutline(r.X, r.Y, r.Right - 1, r.Bottom - 1, primary ? P.Highlight : P.Grey);
+        BitmapFont.Draw(canvas, text, r.X + r.Width / 2, r.Y + 4, primary ? P.Highlight : P.Text, align: TextAlign.Center);
+    }
+
+    protected override Rgb TutorialTitleColor => P.Highlight;
+    protected override Rgb TutorialTextColor => P.Text;
+
     protected override (int Width, int Height, int Gap) PauseButtonSize(int fieldWidth) => (fieldWidth - 16, 14, 6);
 
-    protected override void DrawPauseMenu(PixelCanvas canvas, ScreenLayout layout, Localizer t)
+    protected override void DrawPauseMenu(PixelCanvas canvas, ScreenLayout layout, Localizer t, UserSettings settings)
     {
         var f = layout.Field;
         var rects = PauseMenuRects(layout);
-        int left = rects[0].X - 6, right = rects[0].Right + 5, top = f.Y + f.Height / 2 - 24;
-        canvas.FillRect(left, top, right, rects[1].Bottom + 6, P.Black);
-        canvas.RectOutline(left, top, right, rects[1].Bottom + 6, P.Grey);
+        var entries = PauseMenu.Entries(settings);
+        var rows = PauseOptionRects(layout, entries.Count);
+        var all = rects.Concat(rows).ToList();
+        int left = all.Min(r => r.X) - 6, right = all.Max(r => r.Right) + 5, top = f.Y + f.Height / 2 - 24;
+        int bottom = all.Max(r => r.Bottom) + 6;
+        canvas.FillRect(left, top, right, bottom, P.Black);
+        canvas.RectOutline(left, top, right, bottom, P.Grey);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var r = rows[i];
+            string label = t[entries[i].LabelKey], value = t[entries[i].ValueKey(settings)];
+            string text = BitmapFont.MeasureWidth($"{label} {value}") <= r.Width - 4 ? $"{label} {value}" : $"< {value} >";
+            canvas.RectOutline(r.X, r.Y, r.Right - 1, r.Bottom - 1, P.DarkGrey);
+            BitmapFont.Draw(canvas, text, r.X + r.Width / 2, r.Y + 4, P.Text, align: TextAlign.Center);
+        }
         BitmapFont.Draw(canvas, t["hud.paused"], f.X + f.Width / 2, top + 6, P.Highlight,
             FittingScale(t["hud.paused"], right - left - 4, 2), TextAlign.Center);
         string[] labels = [t["pause.resume"], t["pause.menu"]];
@@ -201,8 +266,8 @@ public sealed class ClassicRenderer : StyleRenderer
     {
         bool land = layout.Orientation == ScreenOrientation.Landscape;
         int menuX = land ? layout.Width * 3 / 4 : layout.Width / 2;
-        int menuY = land ? layout.Height / 4 : layout.Height * 172 / 260;
-        return Enumerable.Range(0, 4).Select(i => new IntRect(menuX - 55, menuY + i * 16 - 4, 110, 15)).ToList();
+        int menuY = land ? layout.Height / 4 : layout.Height * 164 / 260;
+        return Enumerable.Range(0, 5).Select(i => new IntRect(menuX - 55, menuY + i * 16 - 4, 110, 15)).ToList();
     }
 
     public override void RenderTitle(PixelCanvas canvas, ScreenLayout layout, UserSettings settings, Localizer t, int frame)
@@ -228,25 +293,31 @@ public sealed class ClassicRenderer : StyleRenderer
             if (i == 0) BitmapFont.Draw(canvas, ">", cx - BitmapFont.MeasureWidth(items[i]) / 2 - 9, y, color);
         }
         BitmapFont.Draw(canvas, t[settings.Sound ? "status.soundOn" : "status.soundOff"], 4, h - 10, P.Grey);
-        BitmapFont.Draw(canvas, "V0.7", w - 4, h - 10, P.DarkGrey, align: TextAlign.Right);
+        BitmapFont.Draw(canvas, "V1.3", w - 4, h - 10, P.DarkGrey, align: TextAlign.Right);
     }
 
     // ------------------------------------------------------------------ Optionen
 
+    private const int OptionsTitleY = 10;
+
     public override IReadOnlyList<IntRect> OptionRowRects(ScreenLayout layout, int count)
     {
-        int step = Math.Min(24, (layout.Height - 60) / Math.Max(1, count));
-        return Enumerable.Range(0, count).Select(i => new IntRect(4, 34 + i * step - 2, layout.Width - 8, step)).ToList();
+        int shift = layout.TopBelowCutout(OptionsTitleY) - OptionsTitleY;   // SO-7: unter die Kamera-Aussparung
+        int step = Math.Min(24, (layout.Height - 60 - shift) / Math.Max(1, count));
+        return Enumerable.Range(0, count).Select(i => new IntRect(4, 34 + shift + i * step - 2, layout.Width - 8, step)).ToList();
     }
 
-    public override IntRect OptionsBackRect(ScreenLayout layout) => new(layout.Width / 2 - 30, layout.Height - 18, 60, 14);
+    public override IntRect OptionsBackRect(ScreenLayout layout) => new(layout.Width / 4 - 30, layout.Height - 18, 60, 14);
 
-    public override void RenderOptions(PixelCanvas canvas, ScreenLayout layout, UserSettings settings, Localizer t, int selected)
+    public override IntRect OptionsResetRect(ScreenLayout layout) => new(layout.Width * 3 / 4 - 30, layout.Height - 18, 60, 14);
+
+    public override void RenderOptions(PixelCanvas canvas, ScreenLayout layout, UserSettings settings, Localizer t, int selected,
+        bool advanced = false, bool resetArmed = false, int frame = 0)
     {
         canvas.Clear(P.Black);
         int cx = layout.Width / 2;
-        BitmapFont.Draw(canvas, t["menu.options"], cx, 10, P.Highlight, 2, TextAlign.Center);
-        var entries = OptionsMenu.Entries(settings);
+        BitmapFont.Draw(canvas, t[advanced ? "menu.advanced" : "menu.options"], cx, layout.TopBelowCutout(OptionsTitleY), P.Highlight, 2, TextAlign.Center);
+        var entries = OptionEntries(settings, advanced);
         var rows = OptionRowRects(layout, entries.Count);
         for (int i = 0; i < entries.Count; i++)
         {
@@ -258,5 +329,8 @@ public sealed class ClassicRenderer : StyleRenderer
         }
         var back = OptionsBackRect(layout);
         BitmapFont.Draw(canvas, t["menu.back"], back.X + back.Width / 2, back.Y + 4, P.Grey, align: TextAlign.Center);
+        var reset = OptionsResetRect(layout);
+        BitmapFont.Draw(canvas, t[resetArmed ? "menu.resetConfirm" : "menu.reset"], reset.X + reset.Width / 2, reset.Y + 4,
+            resetArmed ? P.Highlight : P.Grey, align: TextAlign.Center);
     }
 }

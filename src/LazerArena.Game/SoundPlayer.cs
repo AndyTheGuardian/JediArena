@@ -43,8 +43,8 @@ public sealed class SoundPlayer : IDisposable
         RequestSong(SongId.Title);
     }
 
-    private readonly Dictionary<(string, VoiceLine), SoundEffect> _voices = [];
-    private readonly List<(VoiceLine Line, float Remaining)> _pendingVoices = [];
+    private readonly Dictionary<(VoiceKind, string, VoiceLine), SoundEffect> _voices = [];
+    private readonly List<(VoiceKind Voice, VoiceLine Line, float Remaining)> _pendingVoices = [];
 
     public void Play(SoundId id, UserSettings settings)
     {
@@ -58,30 +58,31 @@ public sealed class SoundPlayer : IDisposable
     /// </summary>
     public void Play(AudioCue cue, UserSettings settings, string language)
     {
-        bool voice = settings.Voice && cue.Voice is not null;
+        var kind = cue.ForcedVoice ?? settings.VoiceStyle;
+        bool voice = settings.Sound && kind != VoiceKind.Off && cue.Voice is not null;
         if (cue.Sound is { } sound && !(voice && cue.VoiceReplacesSound)) Play(sound, settings);
         if (!voice) return;
-        if (cue.VoiceDelay <= 0) PlayVoice(cue.Voice!.Value, language);
-        else _pendingVoices.Add((cue.Voice!.Value, cue.VoiceDelay));
+        if (cue.VoiceDelay <= 0) PlayVoice(kind, cue.Voice!.Value, language);
+        else _pendingVoices.Add((kind, cue.Voice!.Value, cue.VoiceDelay));
     }
 
     public void TickVoices(float dt, string language)
     {
         for (int i = _pendingVoices.Count - 1; i >= 0; i--)
         {
-            var (line, remaining) = _pendingVoices[i];
-            if (remaining - dt > 0) { _pendingVoices[i] = (line, remaining - dt); continue; }
+            var (voice, line, remaining) = _pendingVoices[i];
+            if (remaining - dt > 0) { _pendingVoices[i] = (voice, line, remaining - dt); continue; }
             _pendingVoices.RemoveAt(i);
-            PlayVoice(line, language);
+            PlayVoice(voice, line, language);
         }
     }
 
-    private void PlayVoice(VoiceLine line, string language)
+    private void PlayVoice(VoiceKind voice, VoiceLine line, string language)
     {
-        if (!_voices.TryGetValue((language, line), out var effect))
+        if (!_voices.TryGetValue((voice, language, line), out var effect))
         {
-            var clip = VoiceBank.Get(language, line);
-            _voices[(language, line)] = effect = new SoundEffect(clip.ToBytes(), clip.SampleRate, AudioChannels.Mono);
+            var clip = VoiceBank.Get(voice, language, line);
+            _voices[(voice, language, line)] = effect = new SoundEffect(clip.ToBytes(), clip.SampleRate, AudioChannels.Mono);
         }
         effect.Play(1f, 0, 0);
     }

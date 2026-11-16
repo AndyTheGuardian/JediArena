@@ -32,8 +32,8 @@ public sealed class ClassicSoundBank : ISoundBank
     {
         SoundId.Fire => Sweep(Wave.Square, 3, 15, 10, 13, 3),
         SoundId.ThrowBack => Sweep(Wave.Square, 14, 2, 10, 13, 5),
-        SoundId.Dock => Sweep(Wave.Square, 2, 8, 6, 12, 8),
-        SoundId.DockLoop => Enumerable.Range(0, 30).Select(i => new Frame(Wave.Buzz4, 1, i % 2 == 0 ? 10 : 6)).ToList(),
+        SoundId.Dock => Sweep(Wave.Square, 2, 8, 6, 7, 4),   // V1.1: leiser (vorher Lautstaerke 12 → 8)
+        SoundId.DockLoop => Enumerable.Range(0, 30).Select(i => new Frame(Wave.Buzz4, 1, i % 2 == 0 ? 6 : 3)).ToList(),   // vorher 10/6
         SoundId.Fizzle => Sweep(Wave.Noise, 6, 12, 14, 8, 0),
         SoundId.ShieldHit => Sweep(Wave.Noise, 2, 4, 9, 14, 0),
         SoundId.ShieldRegrow => [.. Repeat(new Frame(Wave.Square, 12, 6), 4), .. Repeat(new Frame(Wave.Square, 8, 6), 4)],
@@ -42,8 +42,7 @@ public sealed class ClassicSoundBank : ISoundBank
         SoundId.StormStart => Sweep(Wave.Buzz5, 2, 6, 30, 13, 2),
         SoundId.StormEnd => Sweep(Wave.Square, 6, 20, 18, 8, 0),
         SoundId.Countdown => Repeat(new Frame(Wave.Square, 11, 12), 8).ToList(),
-        SoundId.CountdownHigh => Repeat(new Frame(Wave.Square, 8, 12), 8).ToList(),   // etwas hoeher
-        SoundId.RoundStart => Repeat(new Frame(Wave.Square, 5, 13), 14).ToList(),
+        SoundId.RoundStart => Repeat(new Frame(Wave.Square, 5, 13), 14).ToList(),   // RS-4: „GO“ hoeher und laenger
         // Siegesfanfare: C E G C' – As B – C' (Teiler nach Tonhoehe gewaehlt), Schluss mit Ausklingen
         SoundId.MatchWon => [.. new[] { (29, 6), (23, 6), (19, 6), (14, 18), (18, 10), (16, 10) }
             .SelectMany(n => Repeat(new Frame(Wave.Square, n.Item1, 12), n.Item2)), .. Sweep(Wave.Square, 14, 14, 40, 13, 2)],

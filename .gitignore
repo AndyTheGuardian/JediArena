@@ -1,0 +1,18 @@
+# Build-Ausgaben (werden bei jedem Build neu erzeugt)
+bin/
+obj/
+
+# Zwischenspeicher der Handbuch-Erzeugung (tools/docs/make_manual.py)
+tools/docs/build/
+
+# Editor- und Systemdateien
+*.user
+.vs/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Signierschluessel nie einchecken
+*.keystore
+*.jks

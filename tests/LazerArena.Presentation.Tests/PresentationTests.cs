@@ -62,7 +62,10 @@ public class SettingsTests
         Assert.Equal(GraphicsStyle.Modern, s.Style);
         Assert.Equal(LanguageSetting.Automatic, s.Language);
         Assert.Equal(AiLevel.Medium, s.AiLevel);
-        Assert.Equal(SwordTurning.Limited, s.SwordTurning);
+        Assert.Equal(SwordTurning.Limited, s.ToGameOptions().SwordTurning);
+        Assert.Equal(BoltShape.Regular, s.ClassicBolts);
+        Assert.Equal(BoltShape.Lightning, s.ModernBolts);
+        Assert.Equal(VoiceKind.Computer, s.VoiceStyle);
         Assert.Equal(DockedBoltBehavior.Fizzle, s.DockedBolt);
         Assert.Equal(ShieldShape.Straight, s.ShieldShape);
         Assert.True(s.Sound);
@@ -114,7 +117,8 @@ public class SettingsTests
         try
         {
             var store = new JsonSettingsStore(path);
-            var changed = new UserSettings { Style = GraphicsStyle.Classic, Walls = WallBehavior.Extinguish, Music = false };
+            var changed = new SettingsProfiles().Apply(new UserSettings { Walls = WallBehavior.Extinguish, Music = false })
+                .Apply(new UserSettings { Style = GraphicsStyle.Classic });
             store.Save(changed);
             Assert.Equal(changed, new JsonSettingsStore(path).Load());
         }
@@ -128,9 +132,9 @@ public class SettingsTests
     public void Optionen_FehlendeOderKaputteDateiLiefertStandardwerte()
     {
         string path = Path.Combine(Path.GetTempPath(), $"lazer-{Guid.NewGuid():N}.json");
-        Assert.Equal(new UserSettings(), new JsonSettingsStore(path).Load());
+        Assert.Equal(new SettingsProfiles(), new JsonSettingsStore(path).Load());
         File.WriteAllText(path, "{ kaputt");
-        try { Assert.Equal(new UserSettings(), new JsonSettingsStore(path).Load()); }
+        try { Assert.Equal(new SettingsProfiles(), new JsonSettingsStore(path).Load()); }
         finally { File.Delete(path); }
     }
 }
@@ -271,7 +275,7 @@ public class SessionTests
     [Fact, Trait("Regel", "SP-2")]
     public void Drehbefehl_AddiertSichZumZielwinkel()
     {
-        var session = new GameSession(new UserSettings { SwordTurning = SwordTurning.Instant }, twoPlayers: true, seed: 1);
+        var session = new GameSession(new UserSettings(), twoPlayers: true, seed: 1);
         session.Apply([new InputCommand(CommandType.RotateSword, PlayerId.One, 20), new InputCommand(CommandType.RotateSword, PlayerId.One, 15)]);
         Assert.Equal(35f, session.Simulation.PlayerFor(PlayerId.One).TargetAngle);
     }
@@ -503,8 +507,24 @@ public class ArenaTests
         {
             var t = new Localizer(lang);
             foreach (var arena in Enum.GetValues<ArenaKind>())
-                Assert.Equal(ArenaInfo.IsAnimated(arena), t["arena." + arena].EndsWith('*'));
+                Assert.DoesNotContain("*", t["arena." + arena]);   // Kennzeichnung nur ueber das Wort „animiert“
+            Assert.False(string.IsNullOrWhiteSpace(t["opt.arenaAnimated"]));
         }
+        ArenaKind[] animated = [ArenaKind.SpaceFlight, ArenaKind.EnergyCore, ArenaKind.Hologram, ArenaKind.LavaForge];
+        Assert.Equal(animated, Enum.GetValues<ArenaKind>().Where(ArenaInfo.IsAnimated));
+
+        // Das Wort steht nur bei animierten Arenen im Optionsbildschirm
+        static PixelCanvas Options(ArenaKind arena)
+        {
+            var layout = ScreenLayout.Create(GraphicsStyle.Modern, 1080, 2340, 0.53f, false);
+            var canvas = new PixelCanvas(layout.Width, layout.Height);
+            new ModernRenderer().RenderOptions(canvas, layout, new UserSettings { Arena = arena }, new Localizer("de"), 0);
+            return canvas;
+        }
+        static int MarkPixels(PixelCanvas c) =>
+            Enumerable.Range(0, c.Height).Sum(y => Enumerable.Range(0, c.Width)
+                .Count(x => c[x, y].R > 200 && c[x, y].G > 170 && c[x, y].B < 170));   // gelbliche Schrift der Markierung
+        Assert.True(MarkPixels(Options(ArenaKind.SpaceFlight)) > MarkPixels(Options(ArenaKind.SpaceStation)));
     }
 
     [Theory, Trait("Regel", "F4"), Trait("Regel", "OP-11")]

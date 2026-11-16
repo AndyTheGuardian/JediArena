@@ -20,7 +20,7 @@ public sealed class ModernSoundBank : ISoundBank
             {
                 var signal = Synthesize(id);
                 if (id != SoundId.DockLoop) Dsp.Fade(signal);   // die Schleife wird nahtlos gemacht, nicht ausgeblendet
-                _cache[id] = clip = AudioClip.FromFloats(signal, Dsp.SampleRate, peak: 0.8f);
+                _cache[id] = clip = AudioClip.FromFloats(signal, Dsp.SampleRate, peak: Peak(id));
             }
             return clip;
         }
@@ -34,19 +34,23 @@ public sealed class ModernSoundBank : ISoundBank
         SoundId.DockLoop => CrackleLoop(1.0f),
         SoundId.Fizzle => Fizzle(0.45f),
         SoundId.ShieldHit => Swoosh(0.24f),
-        SoundId.ShieldRegrow => Chime([76, 79, 84], 0.07f, 0.35f),
+        SoundId.ShieldRegrow => ElectricFm(),   // V1.1: kurzes, ansteigendes elektrisches Summen
         SoundId.PlayerHit => Explosion(1.3f),
         SoundId.StormWarning => Alarm(1.0f),
         SoundId.StormStart => Thunder(0.9f),
         SoundId.StormEnd => LaserZap(900, 120, 0.5f, seed: 3, volume: 0.6f),
         SoundId.Countdown => Beep(880, 0.14f),
-        SoundId.CountdownHigh => Beep(1175, 0.14f),   // etwas hoeher (eine Quarte)
-        SoundId.RoundStart => Chime([81, 88], 0.0f, 0.4f),
+        SoundId.RoundStart => Beep(1760, 0.32f),   // RS-4: „GO“ eine Oktave hoeher und laenger
         SoundId.MatchWon => Fanfare(),
         SoundId.MatchLost => PowerDown(),
         SoundId.MenuClick => Beep(1320, 0.05f, 0.5f),
         _ => throw new ArgumentOutOfRangeException(nameof(id)),
     };
+
+    /// <summary>Spitzenpegel je Klang; das Nachwachsen des Schilds ist leiser, weil es oft und nebenbei passiert.</summary>
+    public static float Peak(SoundId id) => id == SoundId.ShieldRegrow ? RegrowPeak : 0.8f;
+
+    public const float RegrowPeak = 0.4f;
 
     /// <summary>Laserschuss: abfallende (oder steigende) Tonhoehe, Saege+Rechteck, Rauschanteil, Echo.</summary>
     private static float[] LaserZap(float fromHz, float toHz, float seconds, int seed, float volume = 1f)
@@ -230,20 +234,28 @@ public sealed class ModernSoundBank : ISoundBank
         }
     }
 
-    private static float[] Chime(int[] notes, float step, float seconds)
+    /// <summary>Schildblock waechst nach: elektrisches FM-Summen, Traeger 120 → 480 Hz mit FM-Obertoenen, am Ende ein kurzes Bereit-Ping.</summary>
+    private static float[] ElectricFm()
     {
-        var s = Dsp.Buffer(seconds + step * notes.Length + 0.2f);
-        for (int n = 0; n < notes.Length; n++)
+        const float seconds = 0.34f;
+        var s = Dsp.Buffer(seconds + 0.25f);
+        double carrier = 0, mod = 0;
+        int n = (int)(seconds * Dsp.SampleRate);
+        for (int i = 0; i < n; i++)
         {
-            float hz = Dsp.NoteToHz(notes[n]);
-            int start = (int)(n * step * Dsp.SampleRate);
-            for (int i = start; i < s.Length; i++)
-            {
-                float t = (i - start) / (float)Dsp.SampleRate;
-                s[i] += 0.35f * MathF.Exp(-t * 5) * (Dsp.Sine(hz * t) + 0.3f * Dsp.Sine(2 * hz * t) + 0.15f * Dsp.Triangle(hz * t));
-            }
+            float t = i / (float)n;
+            float hz = 120 * MathF.Pow(4, t);
+            mod += hz * 2.01 / Dsp.SampleRate;
+            float index = 3.5f - 2.8f * t;                               // wird zum Ende reiner
+            carrier += (hz + index * hz * Dsp.Sine(mod)) / Dsp.SampleRate;
+            float env = MathF.Min(1, t / 0.2f) * MathF.Min(1, (1 - t) / 0.06f);
+            s[i] = 0.7f * Dsp.Sine(carrier) * env;
         }
-        Dsp.Echo(s, 0.13f, 0.35f, 1f);
+        for (int i = 0; i < (int)(0.2f * Dsp.SampleRate) && n + i < s.Length; i++)   // kurzes Ping
+        {
+            float t = i / (float)Dsp.SampleRate;
+            s[n + i] += 0.3f * MathF.Exp(-t * 22) * Dsp.Sine(1440 * t);
+        }
         return s;
     }
 

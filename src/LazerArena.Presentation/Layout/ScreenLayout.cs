@@ -22,6 +22,19 @@ public sealed record ScreenLayout(
 {
     public static int ShortSide(GraphicsStyle style) => style == GraphicsStyle.Classic ? 120 : 270;
 
+    /// <summary>
+    /// SO-7: So viele logische Pixel reicht die Kamera-Aussparung von oben ins Bild (0 ohne Aussparung).
+    /// Mittig oben stehende Ueberschriften beginnen erst darunter.
+    /// </summary>
+    public int SafeTop { get; init; }
+
+    /// <summary>Oberkante fuer mittig oben stehende Inhalte: <paramref name="preferred"/> oder knapp unter der Aussparung.</summary>
+    public int TopBelowCutout(int preferred) => SafeTop > 0 ? Math.Max(preferred, SafeTop + 2) : preferred;
+
+    /// <summary>Rechnet eine Aussparung in Geraetepixeln in logische Pixel dieses Layouts um (aufgerundet).</summary>
+    public static int ToLogical(int devicePixels, int screenHeight, int logicalHeight) =>
+        devicePixels <= 0 || screenHeight <= 0 ? 0 : (int)MathF.Ceiling(devicePixels * logicalHeight / (float)screenHeight);
+
     /// <summary>Ganzzahliger Vergroesserungsfaktor fuer die Anzeige auf dem echten Bildschirm.</summary>
     public int PixelScale(int screenWidth, int screenHeight) =>
         Math.Max(1, Math.Min(screenWidth / Width, screenHeight / Height));
@@ -50,6 +63,7 @@ public sealed record ScreenLayout(
             fieldH = h - 2 * hud;
             fieldW = (int)MathF.Round(fieldH * aspect);
         }
+        if (classic) fieldW = BlockGridWidth(fieldW);
         var field = new IntRect((w - fieldW) / 2, (h - fieldH) / 2, fieldW, fieldH);
         var top = new IntRect(0, 0, w, hud);
         var bottom = new IntRect(0, h - hud, w, hud);
@@ -61,11 +75,18 @@ public sealed record ScreenLayout(
         return new ScreenLayout(w, h, ScreenOrientation.Portrait, field, top, bottom, default, default, pause);
     }
 
+    /// <summary>
+    /// Klassischer Stil: Feldbreite auf das Raster der 16 Schildbloecke legen (16 Bloecke + 15 Fugen von 1 Pixel,
+    /// also 16·k − 1), damit die 3:1-Bloecke ohne Rest gleichmaessig verteilt sind. Naechster passender Wert.
+    /// </summary>
+    public static int BlockGridWidth(int width) => Math.Max(15, (int)MathF.Round((width + 1) / 16f) * 16 - 1);
+
     private static ScreenLayout Landscape(int w, int h, bool classic, float aspect)
     {
         int margin = classic ? 2 : 6;
         int fieldH = h - 2 * margin;
         int fieldW = (int)MathF.Round(fieldH * aspect);
+        if (classic) fieldW = BlockGridWidth(fieldW);
         var field = new IntRect((w - fieldW) / 2, margin, fieldW, fieldH);
         int panelW = field.X - 12;
         var left = new IntRect(6, 6, panelW, h / 2 - 8);

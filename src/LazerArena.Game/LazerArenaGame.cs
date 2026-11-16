@@ -29,6 +29,8 @@ public sealed class LazerArenaGame : Microsoft.Xna.Framework.Game
     private RenderTarget2D? _glowTarget;
     private Texture2D? _scanlines;
     private Texture2D? _vignette;
+    private (int, int, int) _scanlineKey;
+    private int _vignetteKey;
 
     public LazerArenaGame(IPlatformServices platform, int windowWidth = 540, int windowHeight = 1170, bool fullScreen = false)
     {
@@ -62,7 +64,7 @@ public sealed class LazerArenaGame : Microsoft.Xna.Framework.Game
     {
         float dt = MathF.Min((float)gameTime.ElapsedGameTime.TotalSeconds, 0.1f);
         _app.ScreenWidth = GraphicsDevice.Viewport.Width;
-        _app.ScreenHeight = GraphicsDevice.Viewport.Height;
+        _app.ScreenHeight = GraphicsDevice.Viewport.Height - _platform.Cutout.Reserved;   // SO-7
         UpdateDestination(_screen.Layout);
 
         var keys = ReadKeyboard();
@@ -120,22 +122,30 @@ public sealed class LazerArenaGame : Microsoft.Xna.Framework.Game
     /// </summary>
     private void PrepareTvEffect(LazerArena.Presentation.Layout.ScreenLayout layout)
     {
-        int gw = Math.Max(1, layout.Width / 3), gh = Math.Max(1, layout.Height / 3);
+        var tv = _app.Settings.Advanced;   // OP-15: Feineinstellungen
+        // V1.1: Zeilen und Leuchten im Raster des klassischen Stils, damit der Effekt in beiden Stilen gleich grob aussieht
+        int rows = TvEffect.ScanlineRows(layout.Height, _app.Settings.Style);
+        float coarse = TvEffect.CoarseFactor(_app.Settings.Style);
+        int gw = Math.Max(1, (int)(layout.Width / (tv.GlowDownscale * coarse))), gh = Math.Max(1, (int)(layout.Height / (tv.GlowDownscale * coarse)));
         if (_glowTarget is null || _glowTarget.Width != gw || _glowTarget.Height != gh)
         {
             _glowTarget?.Dispose();
             _glowTarget = new RenderTarget2D(GraphicsDevice, gw, gh);
         }
-        if (_scanlines is null || _scanlines.Height != layout.Height * TvEffect.RowParts)
+        var scanKey = (rows, tv.TvScanlineDarkness, tv.ScanlineRowParts);
+        if (_scanlines is null || _scanlineKey != scanKey)
         {
             _scanlines?.Dispose();
-            _scanlines = new Texture2D(GraphicsDevice, 1, layout.Height * TvEffect.RowParts);
-            _scanlines.SetData(TvEffect.ScanlineTexture(layout.Height));
+            _scanlines = new Texture2D(GraphicsDevice, 1, rows * tv.ScanlineRowParts);
+            _scanlines.SetData(TvEffect.ScanlineTexture(rows, tv.TvScanlineDarkness / 100f, tv.ScanlineRowParts));
+            _scanlineKey = scanKey;
         }
-        if (_vignette is null)
+        if (_vignette is null || _vignetteKey != tv.TvVignette)
         {
+            _vignette?.Dispose();
             _vignette = new Texture2D(GraphicsDevice, 64, 64);
-            _vignette.SetData(TvEffect.VignetteTexture(64));
+            _vignette.SetData(TvEffect.VignetteTexture(64, tv.TvVignette / 100f));
+            _vignetteKey = tv.TvVignette;
         }
         GraphicsDevice.SetRenderTarget(_glowTarget);
         GraphicsDevice.Clear(Color.Black);
@@ -147,15 +157,17 @@ public sealed class LazerArenaGame : Microsoft.Xna.Framework.Game
 
     private void DrawTvEffect()
     {
-        int spreadX = (int)(_destination.Width * TvEffect.GlowSpread), spreadY = (int)(_destination.Height * TvEffect.GlowSpread / 2);
+        var tv = _app.Settings.Advanced;
+        float spread = tv.TvGlowSpread / 100f;
+        int spreadX = (int)(_destination.Width * spread), spreadY = (int)(_destination.Height * spread / 2);
         var glowArea = new Rectangle(_destination.X - spreadX, _destination.Y - spreadY,
             _destination.Width + 2 * spreadX, _destination.Height + 2 * spreadY);
         _spriteBatch.Begin(blendState: BlendState.Additive, samplerState: SamplerState.LinearClamp);
-        _spriteBatch.Draw(_glowTarget!, glowArea, Color.White * TvEffect.GlowStrength);
+        _spriteBatch.Draw(_glowTarget!, glowArea, Color.White * (tv.TvGlow / 100f));
         _spriteBatch.End();
 
         _spriteBatch.Begin(blendState: BlendState.AlphaBlend, samplerState: SamplerState.PointClamp);
-        _spriteBatch.Draw(_scanlines!, _destination, Color.White);   // eine dunkle Linie je logischer Pixelzeile
+        _spriteBatch.Draw(_scanlines!, _destination, Color.White);   // dunkle Linien im Zeilenraster des klassischen Stils
         _spriteBatch.End();
 
         _spriteBatch.Begin(blendState: BlendState.AlphaBlend, samplerState: SamplerState.LinearClamp);
@@ -165,11 +177,12 @@ public sealed class LazerArenaGame : Microsoft.Xna.Framework.Game
 
     private void UpdateDestination(LazerArena.Presentation.Layout.ScreenLayout layout)
     {
-        int vw = GraphicsDevice.Viewport.Width, vh = GraphicsDevice.Viewport.Height;
+        int reserved = _platform.Cutout.Reserved;   // SO-7: Aussparung nicht mittig: Bild beginnt darunter
+        int vw = GraphicsDevice.Viewport.Width, vh = GraphicsDevice.Viewport.Height - reserved;
         // bildschirmfuellend einpassen; das logische Bild hat bereits das Seitenverhaeltnis des Geraets
         float scale = MathF.Min(vw / (float)layout.Width, vh / (float)layout.Height);
         int w = (int)(layout.Width * scale), h = (int)(layout.Height * scale);
-        _destination = new Rectangle((vw - w) / 2, (vh - h) / 2, w, h);
+        _destination = new Rectangle((vw - w) / 2, reserved + (vh - h) / 2, w, h);
     }
 
     protected override void Dispose(bool disposing)

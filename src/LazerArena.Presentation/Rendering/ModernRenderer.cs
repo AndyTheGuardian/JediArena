@@ -18,10 +18,11 @@ public sealed class ModernRenderer : StyleRenderer
     private static readonly Rgb[] ArmorP1 = [Rgb.FromBytes(14, 34, 70), Rgb.FromBytes(28, 66, 120), Rgb.FromBytes(52, 104, 170), Rgb.FromBytes(110, 160, 220)];
     private static readonly Rgb[] ArmorP2 = [Rgb.FromBytes(50, 10, 40), Rgb.FromBytes(100, 26, 80), Rgb.FromBytes(160, 50, 130), Rgb.FromBytes(220, 120, 190)];
     private static readonly Rgb[] Helmet = [Rgb.FromBytes(70, 76, 96), Rgb.FromBytes(130, 138, 160), Rgb.FromBytes(190, 196, 214), Rgb.FromBytes(240, 244, 255)];
-    private static readonly Rgb[] Metal = [Rgb.FromBytes(40, 44, 60), Rgb.FromBytes(90, 96, 120), Rgb.FromBytes(150, 158, 184), Rgb.FromBytes(220, 226, 240)];
     private const int HiltLength = 11;
     private const float OriginalBoltGlow = 1.7f;    // Leuchtstaerke der Blitze in der Arena „Original“
     private const float OriginalBladeGlow = 1.4f;   // Leuchtstaerke der Klingen in der Arena „Original“
+    private const float StormRingGlow = 0.8f;       // dezentes Leuchten des roten Gewitterrings
+    private const int StormPulseFrames = 50;        // Pulsdauer des roten Lichts im Gewitter (bei 60 Bildern/s)
     private const float SnesGlowFactor = 0.75f;     // SNES-Arenen: 75 % des Original-Leuchtens
 
     private readonly SnesArena? _arena;
@@ -117,6 +118,7 @@ public sealed class ModernRenderer : StyleRenderer
         if (_arena is not null)
         {
             _arena.DrawAnimated(canvas, _arenaLayout!, CurrentFrame);
+            _arena.DrawStormLights(canvas, _arenaLayout!, CurrentFrame, StormActive && StormLights);
             return;
         }
         var f = map.Field;
@@ -149,7 +151,7 @@ public sealed class ModernRenderer : StyleRenderer
             return;
         }
         var col = Team(owner);
-        foreach (var s in shield.Segments.Where(s => s.Alive))
+        foreach (var s in shield.Segments.Where(s => Visible(s, owner)))
         {
             var (x0, y0, x1, y1) = map.ToScreen(s.Bounds);
             x0 += 1; x1 -= 1;   // Fuge nur in der Grafik (A5)
@@ -166,32 +168,50 @@ public sealed class ModernRenderer : StyleRenderer
         var c = map.ToScreen(player.Position);
         float r = map.Field.Width * 0.045f;
         var (hand, tip) = SwordPoints(map, player, config);
+        // Auf ganze Pixel legen: sonst haengt die Klingenbreite vom Bruchteil der Position ab (oben breiter als unten)
+        hand = Snap(hand);
+        tip = Snap(tip);
         var dir = Vector2.Normalize(tip - hand);
         var col = Team(player.Id);
+        float swordGlow = OriginalBladeGlow * Look.SwordGlow / 100f;   // OP-15
         float visorY = c.Y + player.Forward * r * 0.35f;
 
-        if (_arena is not null)   // SNES: Kontur, 4 Schattierungsstufen, transparente Klinge
+        if (_arena is not null)   // SNES: Kontur, 4 Schattierungsstufen, deckende Klinge
         {
             canvas.FillEllipse(c.X, c.Y, r * 2f + 1, r * 1.05f + 1, Ink);
             canvas.PosterizedEllipse(c.X, c.Y, r * 2f, r * 1.05f, player.Id == PlayerId.One ? ArmorP1 : ArmorP2);
             canvas.FillEllipse(c.X, c.Y, r * 0.95f + 1, r * 0.95f + 1, Ink);
             canvas.PosterizedEllipse(c.X, c.Y, r * 0.95f, r * 0.95f, Helmet);
             canvas.Line(c.X - r * 0.5f, visorY, c.X + r * 0.5f, visorY, Rgb.FromBytes(20, 20, 40));
-            var bladeStart = DrawHilt(canvas, hand, dir, outline: true);
+            var bladeStart = Snap(DrawHilt(canvas, hand, dir, outline: true));
             // Leuchten wie in der Arena „Original“, mit 75 % der Staerke
-            canvas.GlowLine(bladeStart.X, bladeStart.Y, tip.X, tip.Y, col, 4, 3, OriginalBladeGlow * SnesGlowFactor);
-            canvas.BlendPolyline([bladeStart, tip], col, 3, 0.67f);
-            canvas.Line(bladeStart.X, bladeStart.Y, tip.X, tip.Y, Rgb.Lerp(col, Rgb.FromBytes(255, 255, 255), 0.8f));
+            canvas.GlowLine(bladeStart.X, bladeStart.Y, tip.X, tip.Y, col, 4, 3, swordGlow * SnesGlowFactor);
+            DrawBlade(canvas, bladeStart, tip, col);
             return;
         }
 
         canvas.ShadedEllipse(c.X, c.Y, r * 2f, r * 1.05f, player.Id == PlayerId.One ? P.P1Armor : P.P2Armor);
         canvas.ShadedEllipse(c.X, c.Y, r * 0.95f, r * 0.95f, Rgb.FromBytes(200, 205, 220));
         canvas.Line(c.X - r * 0.5f, visorY, c.X + r * 0.5f, visorY, Rgb.FromBytes(30, 30, 50));
-        var start = DrawHilt(canvas, hand, dir, outline: false);
-        canvas.GlowLine(start.X, start.Y, tip.X, tip.Y, col, 4, 3, OriginalBladeGlow);
-        canvas.Line(start.X, start.Y, tip.X, tip.Y, col.Add(120), 2);
+        var start = Snap(DrawHilt(canvas, hand, dir, outline: false));
+        canvas.GlowLine(start.X, start.Y, tip.X, tip.Y, col, 4, 3, swordGlow);
+        DrawBlade(canvas, start, tip, col);
     }
+
+    /// <summary>Deckende Klinge: 3 Pixel in hellem Teamton, in der Mitte fast weiss.</summary>
+    private static readonly Rgb White = Rgb.FromBytes(255, 255, 255);
+    private const float BladeEdgeWhite = 0.45f;   // Anteil Weiss am Rand von Klinge und Blitz
+    private const float BladeCoreWhite = 0.92f;   // fast weisser Kern
+    public const int BladeWidth = 3;
+    public const int BoltWidth = 2;               // Blitze: wie die Klinge, nur etwas schmaler
+
+    private static void DrawBlade(PixelCanvas canvas, Vector2 start, Vector2 tip, Rgb col)
+    {
+        canvas.Line(start.X, start.Y, tip.X, tip.Y, Rgb.Lerp(col, White, BladeEdgeWhite), BladeWidth);
+        canvas.Line(start.X, start.Y, tip.X, tip.Y, Rgb.Lerp(col, White, BladeCoreWhite));
+    }
+
+    private static Vector2 Snap(Vector2 p) => new(MathF.Round(p.X), MathF.Round(p.Y));
 
     /// <summary>Schlichter Schwertgriff ohne seitliche Teile: Griff mit Rillen und Endkappe; liefert den Klingenansatz.</summary>
     private static Vector2 DrawHilt(PixelCanvas canvas, Vector2 hand, Vector2 dir, bool outline)
@@ -212,9 +232,9 @@ public sealed class ModernRenderer : StyleRenderer
     }
 
     /// <summary>SNES-Schild: Segmente mit Kontur, heller Ober-/Linkskante, dunkler Unter-/Rechtskante.</summary>
-    private static void DrawSnesShield(PixelCanvas canvas, FieldMapper map, Shield shield, (Rgb Light, Rgb Mid, Rgb Dark) colors)
+    private void DrawSnesShield(PixelCanvas canvas, FieldMapper map, Shield shield, (Rgb Light, Rgb Mid, Rgb Dark) colors)
     {
-        var alive = shield.Segments.Where(s => s.Alive).Select(s => (s.Row, Box: map.ToScreen(s.Bounds))).ToList();
+        var alive = shield.Segments.Where(s => Visible(s, shield.Owner)).Select(s => (s.Row, Box: map.ToScreen(s.Bounds))).ToList();
         foreach (var (_, (x0, y0, x1, y1)) in alive) canvas.RectOutline(x0 - 1, y0 - 1, x1 + 1, y1 + 1, Ink);
         foreach (var (row, (x0, y0, x1Full, y1)) in alive)
         {
@@ -231,31 +251,29 @@ public sealed class ModernRenderer : StyleRenderer
     protected override void DrawBolt(PixelCanvas canvas, IReadOnlyList<Vector2> path, BoltOwner owner, bool docked, int seed)
     {
         var col = Team(owner);
-        var points = Zigzag.Along(path, docked ? 9 : 8, docked ? 6.3f : 5.4f, seed);   // 10 % kleiner
-        var branches = Zigzag.Branches(points, docked ? 3 : 2, 12.6f, seed);
-        var core = Rgb.Lerp(col, Rgb.FromBytes(255, 255, 255), 0.75f);
-        if (_arena is not null)   // heller Kern, nach aussen in Stufen transparenter
-        {
-            // Leuchten wie in der Arena „Original“, mit 75 % der Staerke (SnesGlowFactor); heller Kern
-            canvas.GlowPolyline(points, col, docked ? 4 : 3, 3, OriginalBoltGlow * SnesGlowFactor);
-            canvas.BlendPolyline(points, col, 2, 0.78f);
-            foreach (var branch in branches)
-            {
-                canvas.GlowPolyline(branch, col, 1, 3, 1.2f * SnesGlowFactor);
-                canvas.BlendPolyline(branch, core, 1, 0.75f);
-            }
-            canvas.Polyline(points, core);
-            if (docked) SnesSpark(canvas, path[^1]);
-            return;
-        }
+        // OP-14: zackig mit Seitenaesten (Standard) oder gleichmaessiges Zickzack ohne Aeste wie in den ersten Versionen
+        bool lightning = Bolts == BoltShape.Lightning;
+        var points = lightning
+            ? Zigzag.Along(path, docked ? 9 : 8, docked ? 6.3f : 5.4f, seed)
+            : Zigzag.Along(path, docked ? 9 : 8, docked ? 4.5f : 3.6f, seed, irregular: false);
+        var branches = lightning ? Zigzag.Branches(points, docked ? 3 : 2, 12.6f, seed) : [];
+        float boltGlow = OriginalBoltGlow * Look.BoltGlow / 100f;   // OP-15
+        float glowFactor = _arena is not null ? SnesGlowFactor : 1f;
+        // BL-8: wie die Lichtschwerter (deckender heller Rand, fast weisser deckender Kern), nur schmaler;
+        // transparent ist nur das Leuchten aussen
         foreach (var branch in branches)
         {
-            canvas.GlowPolyline(branch, col, 1, 3, 1.2f);
-            canvas.Polyline(branch, col.Add(110));
+            canvas.GlowPolyline(branch, col, 1, 3, 1.2f * Look.BoltGlow / 100f * glowFactor);
+            canvas.Polyline(branch, Rgb.Lerp(col, White, BladeEdgeWhite));
         }
-        canvas.GlowPolyline(points, col, docked ? 4 : 3, 3, OriginalBoltGlow);
-        canvas.Polyline(points, col.Add(150), docked ? 2 : 1);
-        if (docked) Spark(canvas, path[^1]);
+        canvas.GlowPolyline(points, col, docked ? 4 : 3, 3, boltGlow * glowFactor);
+        canvas.Polyline(points, Rgb.Lerp(col, White, BladeEdgeWhite), BoltWidth);
+        canvas.Polyline(points, Rgb.Lerp(col, White, BladeCoreWhite));
+        if (docked)
+        {
+            if (_arena is not null) SnesSpark(canvas, path[^1]);
+            else Spark(canvas, path[^1]);
+        }
     }
 
     private static void SnesSpark(PixelCanvas canvas, Vector2 p)
@@ -284,32 +302,14 @@ public sealed class ModernRenderer : StyleRenderer
     {
         float r = DroneRadius(map);
         var eye = storm ? Rgb.FromBytes(255, 60, 40) : Rgb.FromBytes(255, 200, 60);
-        if (_arena is not null)
-        {
-            if (storm)
-            {
-                canvas.BlendPolyline(Circle(c, r * StormRingFactor), Rgb.FromBytes(255, 60, 40), 5, 0.3f);
-                canvas.EllipseOutline(c.X, c.Y, r * StormRingFactor, r * StormRingFactor, Rgb.FromBytes(255, 90, 60), 1);
-            }
-            canvas.EllipseOutline(c.X, c.Y, r * 1.6f, r * 1.6f, Ink, 4);
-            canvas.EllipseOutline(c.X, c.Y, r * 1.6f, r * 1.6f, Rgb.FromBytes(110, 120, 150), 2);
-            float spin = RingAngle();
-            foreach (var mark in RingMarks(c, r * 1.6f, spin)) canvas.Line(mark.A.X, mark.A.Y, mark.B.X, mark.B.Y, Rgb.FromBytes(200, 210, 235));
-            foreach (var n in Nozzles(c, r * 1.55f, spin))
-            {
-                canvas.FillEllipse(n.X, n.Y, 3, 3, Ink);
-                canvas.FillEllipse(n.X, n.Y, 2, 2, Rgb.FromBytes(255, 140, 40));
-            }
-            canvas.FillEllipse(c.X, c.Y, r + 1, r + 1, Ink);
-            canvas.PosterizedEllipse(c.X, c.Y, r, r, Metal);
-            canvas.FillEllipse(c.X, c.Y, 2, 2, eye);
-            canvas.Set((int)c.X - 1, (int)c.Y - 1, Rgb.FromBytes(255, 255, 230));
-            return;
-        }
+        // Im Gewitter pulsiert das rote Licht (Ring und Auge), etwa 1,2-mal je Sekunde
+        float pulse = storm ? 0.55f + 0.45f * (0.5f + 0.5f * MathF.Sin(CurrentFrame * MathF.Tau / StormPulseFrames)) : 1f;
+        // Drohne der Arena „Original“ in allen Arenen
         if (storm)
         {
-            canvas.GlowRing(c.X, c.Y, r * StormRingFactor, Rgb.FromBytes(255, 60, 40), 2.5f, 1.5f);
-            canvas.EllipseOutline(c.X, c.Y, r * StormRingFactor, r * StormRingFactor, Rgb.FromBytes(255, 90, 60), 1);
+            // dezentes Leuchten um den roten Ring (OP-15: Staerke einstellbar)
+            canvas.GlowRing(c.X, c.Y, r * StormRingFactor, Rgb.FromBytes(255, 60, 40), 2f, StormRingGlow * pulse * Look.RingGlow / 100f);
+            canvas.EllipseOutline(c.X, c.Y, r * StormRingFactor, r * StormRingFactor, Rgb.Lerp(Rgb.FromBytes(150, 40, 30), Rgb.FromBytes(255, 90, 60), pulse), 1);
         }
         float angle = RingAngle();
         foreach (var n in Nozzles(c, r * 1.55f, angle))
@@ -320,7 +320,7 @@ public sealed class ModernRenderer : StyleRenderer
         canvas.EllipseOutline(c.X, c.Y, r * 1.6f, r * 1.6f, Rgb.FromBytes(110, 120, 150), 2);
         foreach (var mark in RingMarks(c, r * 1.6f, angle)) canvas.Line(mark.A.X, mark.A.Y, mark.B.X, mark.B.Y, Rgb.FromBytes(190, 200, 230));
         canvas.ShadedEllipse(c.X, c.Y, r, r, Rgb.FromBytes(150, 160, 185));
-        canvas.GlowCircle(c.X, c.Y, 2, eye, 2.5f, 1.8f);
+        canvas.GlowCircle(c.X, c.Y, 2, eye, 2.5f, 1.8f * pulse * Look.EyeGlow / 100f);
         canvas.FillEllipse(c.X, c.Y, 1.5f, 1.5f, Rgb.FromBytes(255, 255, 220));
     }
 
@@ -366,8 +366,6 @@ public sealed class ModernRenderer : StyleRenderer
             return (c + dir * (radius - 1.5f), c + dir * (radius + 1.5f));
         });
 
-    private static List<Vector2> Circle(Vector2 c, float r) =>
-        Enumerable.Range(0, 49).Select(i => c + new Vector2(MathF.Cos(i * MathF.Tau / 48), MathF.Sin(i * MathF.Tau / 48)) * r).ToList();
     private static float DroneRadius(FieldMapper map) => map.Field.Width * 0.045f;
 
     // ------------------------------------------------------------------ HUD
@@ -523,17 +521,23 @@ public sealed class ModernRenderer : StyleRenderer
 
     protected override (int Width, int Height, int Gap) PauseButtonSize(int fieldWidth) => (fieldWidth - 50, 29, 10);
 
-    protected override void DrawPauseMenu(PixelCanvas canvas, ScreenLayout layout, Localizer t)
+    protected override void DrawPauseMenu(PixelCanvas canvas, ScreenLayout layout, Localizer t, UserSettings settings)
     {
         var f = layout.Field;
         var rects = PauseMenuRects(layout);
-        int left = rects[0].X - 13, right = rects[0].Right + 12, top = f.Y + f.Height / 2 - 40, bottom = rects[1].Bottom + 12;
+        var entries = PauseMenu.Entries(settings);
+        var rows = PauseOptionRects(layout, entries.Count);
+        var all = rects.Concat(rows).ToList();
+        int left = all.Min(r => r.X) - 13, right = all.Max(r => r.Right) + 12, top = f.Y + f.Height / 2 - 40;
+        int bottom = all.Max(r => r.Bottom) + 12;
         canvas.GlowRect(left, top, right, bottom, P.P1.Scale(0.4f), 4, 1);
         canvas.RoundedRect(left, top, right, bottom, 8, Rgb.FromBytes(10, 12, 30), P.P1);
         BitmapFont.Draw(canvas, t["hud.paused"], f.X + f.Width / 2, top + 10, Rgb.FromBytes(255, 220, 120),
             FittingScale(t["hud.paused"], right - left - 8, 3), TextAlign.Center, P.Shadow);
         Button(canvas, rects[0], t["pause.resume"], selected: true);
         Button(canvas, rects[1], t["pause.menu"], selected: false);
+        for (int i = 0; i < entries.Count; i++)
+            DrawOptionRow(canvas, rows[i], t[entries[i].LabelKey], t[entries[i].ValueKey(settings)], sel: false, last: i == entries.Count - 1);
     }
 
     // ------------------------------------------------------------------ Siegerbildschirm
@@ -546,6 +550,11 @@ public sealed class ModernRenderer : StyleRenderer
         var gold = info.HumanWon ? Rgb.FromBytes(255, 200, 60) : Rgb.FromBytes(130, 135, 150);
         float tx = land ? w * 0.3f : w / 2f, ty = land ? h * 0.52f : h * 0.42f;
         float size = land ? h * 0.36f : w * 0.36f;
+        DrawMenuStars(canvas, layout, frame);
+        // V1.0: Pixelbild der Heldin statt Pokal (Sieg: Schwert erhoben, Niederlage: kniend)
+        var art = PixelArt.Get(info.HumanWon ? ArtId.Victory : ArtId.Defeat, land);
+        int artBottom = land ? (info.HumanWon ? h - 18 : h - 40) : (info.HumanWon ? (int)(h * 0.65f) : (int)(h * 0.6f));
+        ty = artBottom - art.Height / 2f;
 
         if (info.HumanWon)   // drehende Lichtstrahlen
             for (int i = 0; i < 12; i++)
@@ -553,7 +562,6 @@ public sealed class ModernRenderer : StyleRenderer
                 float a = frame * 0.01f + i * MathF.PI / 6;
                 canvas.GlowLine(tx, ty, tx + MathF.Cos(a) * size * 2.2f, ty + MathF.Sin(a) * size * 2.2f, gold.Scale(0.35f), 6, 5, 0.8f);
             }
-        DrawTrophy(canvas, tx, ty, size, gold, info.HumanWon);
         if (info.HumanWon)   // Funkeln
             for (int i = 0; i < 6; i++)
             {
@@ -582,42 +590,14 @@ public sealed class ModernRenderer : StyleRenderer
         if (info.ShowContinue && frame / 30 % 2 == 0)
             BitmapFont.Draw(canvas, t["hud.tapToContinue"], textX, land ? h - 30 : h - 40, P.Dim, align: TextAlign.Center, shadow: P.Shadow);
         Finish(canvas);
+        art.DrawBottomCentered(canvas, (int)tx, artBottom);   // nach der Farbreduktion: Bildfarben sind schon Palettenfarben, kein Dithering
     }
 
+    /// <summary>V1.0: Sternenflug wie im Titel auch in Optionen, Sieg und Niederlage.</summary>
+    private void DrawMenuStars(PixelCanvas canvas, ScreenLayout layout, int frame) =>
+        _titleStars.Draw(canvas, new Vector2(layout.Width / 2f, layout.Height / 2f), Math.Min(layout.Width, layout.Height) * 0.16f, frame);
+
     /// <summary>Pokal: Schale mit Stern, Henkel, Stiel und Sockel, von links oben beleuchtet.</summary>
-    private static void DrawTrophy(PixelCanvas canvas, float cx, float cy, float size, Rgb gold, bool shine)
-    {
-        float top = cy - size * 0.75f, bowlH = size * 0.8f, rim = size * 0.55f;
-        if (shine) canvas.GlowCircle(cx, cy - size * 0.2f, size * 0.6f, gold.Scale(0.3f), size * 0.4f, 1);
-        // Henkel
-        foreach (int side in new[] { -1, 1 })
-        {
-            canvas.EllipseOutline(cx + side * rim * 0.95f, top + bowlH * 0.32f, rim * 0.38f, bowlH * 0.3f, gold.Scale(0.75f), 4);
-            canvas.EllipseOutline(cx + side * rim * 0.95f, top + bowlH * 0.32f, rim * 0.38f, bowlH * 0.3f, gold, 2);
-        }
-        // Schale: nach unten schmaler werdend, Glanz links
-        for (int y = 0; y < (int)bowlH; y++)
-        {
-            float v = y / bowlH;
-            float half = rim * (1 - 0.82f * v * v);
-            for (int x = (int)(-half); x <= (int)half; x++)
-            {
-                float u = (x / half + 1) / 2;   // 0 links .. 1 rechts
-                float light = 1.25f - 0.75f * u + (u < 0.25f && u > 0.12f ? 0.35f : 0);
-                canvas.Set((int)(cx + x), (int)(top + y), new Rgb(MathF.Min(255, gold.R * light), MathF.Min(255, gold.G * light), MathF.Min(255, gold.B * light)));
-            }
-        }
-        canvas.FillEllipse(cx, top, rim, size * 0.07f, gold.Scale(0.55f));   // Oeffnung
-        canvas.EllipseOutline(cx, top, rim, size * 0.07f, gold.Add(40), 1);
-        // Stern auf der Schale
-        canvas.FillStar(cx, top + bowlH * 0.38f, size * 0.17f, size * 0.07f, shine ? Rgb.FromBytes(255, 255, 230) : Rgb.FromBytes(190, 195, 210));
-        // Stiel und Sockel
-        float stemTop = top + bowlH, stemH = size * 0.28f;
-        canvas.FillRect((int)(cx - size * 0.06f), (int)stemTop, (int)(cx + size * 0.06f), (int)(stemTop + stemH), gold.Scale(0.85f));
-        canvas.FillRect((int)(cx - size * 0.3f), (int)(stemTop + stemH), (int)(cx + size * 0.3f), (int)(stemTop + stemH + size * 0.1f), gold);
-        canvas.FillRect((int)(cx - size * 0.42f), (int)(stemTop + stemH + size * 0.1f), (int)(cx + size * 0.42f), (int)(stemTop + stemH + size * 0.24f), gold.Scale(0.7f));
-        canvas.Line(cx - size * 0.42f, stemTop + stemH + size * 0.1f, cx + size * 0.42f, stemTop + stemH + size * 0.1f, gold.Add(50));
-    }
 
     // ------------------------------------------------------------------ Titel
 
@@ -626,8 +606,8 @@ public sealed class ModernRenderer : StyleRenderer
         bool land = layout.Orientation == ScreenOrientation.Landscape;
         int w = layout.Width, h = layout.Height;
         return land
-            ? Enumerable.Range(0, 4).Select(i => new IntRect(w - 255, 50 + i * 42, 225, 29)).ToList()
-            : Enumerable.Range(0, 4).Select(i => new IntRect(45, h * 392 / 585 + i * 36, w - 90, 29)).ToList();
+            ? Enumerable.Range(0, 5).Select(i => new IntRect(w - 255, 40 + i * 40, 225, 29)).ToList()
+            : Enumerable.Range(0, 5).Select(i => new IntRect(45, h * 392 / 585 + i * 34, w - 90, 29)).ToList();
     }
 
     public override void RenderTitle(PixelCanvas canvas, ScreenLayout layout, UserSettings settings, Localizer t, int frame)
@@ -659,8 +639,6 @@ public sealed class ModernRenderer : StyleRenderer
         }
         BitmapFont.Draw(canvas, t["title.tagline"], logoX, land ? 140 : h * 200 / 585, Rgb.FromBytes(150, 200, 255),
             align: TextAlign.Center, shadow: P.Shadow);
-        var demo = land ? new IntRect(logoX - 50, 152, 100, 112) : new IntRect(w / 2 - 75, h * 220 / 585, 150, h * 150 / 585);
-        DrawTitleDemo(canvas, demo);
 
         var items = TitleItems(settings, t);
         var rects = TitleItemRects(layout);
@@ -668,9 +646,23 @@ public sealed class ModernRenderer : StyleRenderer
             Button(canvas, rects[i], items[i], selected: i == 0);
         NoteIcon(canvas, 10, h - 22);
         BitmapFont.Draw(canvas, t[settings.Music ? "status.musicOn" : "status.musicOff"], 26, h - 18, P.Dim);
-        BitmapFont.Draw(canvas, "V0.7", w - 8, h - 18, Rgb.FromBytes(80, 90, 130), align: TextAlign.Right);
+        BitmapFont.Draw(canvas, "V1.3", w - 8, h - 18, Rgb.FromBytes(80, 90, 130), align: TextAlign.Right);
         Finish(canvas);
+        // V1.0: Heldin im Kampf mit der Drohne in der Mitte (nach der Farbreduktion, ohne Dithering)
+        var art = PixelArt.Get(ArtId.Title, land);
+        art.DrawBottomCentered(canvas, logoX, land ? h - 26 : h * 386 / 585);
     }
+
+    protected override void DrawTutorialFrame(PixelCanvas canvas, IntRect scene)
+    {
+        _titleStars.Draw(canvas, new Vector2(canvas.Width / 2f, canvas.Height / 2f), Math.Min(canvas.Width, canvas.Height) * 0.16f, CurrentFrame);
+        canvas.GlowRect(scene.X - 4, scene.Y - 4, scene.Right + 3, scene.Bottom + 3, P.P1.Scale(0.3f), 3, 1);
+        canvas.RoundedRect(scene.X - 4, scene.Y - 4, scene.Right + 3, scene.Bottom + 3, 5, Rgb.FromBytes(16, 18, 38), Rgb.FromBytes(70, 80, 130));
+        int my = scene.Y + scene.Height / 2;
+        for (int x = scene.X; x < scene.Right; x += 6) canvas.Line(x, my, x + 2, my, Rgb.FromBytes(60, 80, 140));
+    }
+
+    protected override void DrawTutorialButton(PixelCanvas canvas, IntRect r, string text, bool primary) => Button(canvas, r, text, primary);
 
     private static void Button(PixelCanvas canvas, IntRect r, string text, bool selected)
     {
@@ -690,39 +682,79 @@ public sealed class ModernRenderer : StyleRenderer
 
     // ------------------------------------------------------------------ Optionen
 
+    /// <summary>Optionswerte in doppelter Schrift (14 Pixel): ganzzahlig vergroessert, daher gleichmaessige Buchstaben.</summary>
+    private const int ValueScale = 2;
+
+    private const int OptionsTop = 54;   // erste Optionszeile unter der Ueberschrift
+    private const int OptionsTitleY = 18;
+
     public override IReadOnlyList<IntRect> OptionRowRects(ScreenLayout layout, int count)
     {
-        int step = Math.Min(50, (layout.Height - 64 - 56) / Math.Max(1, count));
-        return Enumerable.Range(0, count).Select(i => new IntRect(16, 64 + i * step, layout.Width - 32, step - 6)).ToList();
+        int top = OptionsTop + layout.TopBelowCutout(OptionsTitleY) - OptionsTitleY;   // SO-7: unter die Kamera-Aussparung
+        int step = Math.Min(50, (layout.Height - top - 54) / Math.Max(1, count));
+        return Enumerable.Range(0, count).Select(i => new IntRect(16, top + i * step, layout.Width - 32, step - 4)).ToList();
     }
 
-    public override IntRect OptionsBackRect(ScreenLayout layout) => new(70, layout.Height - 46, layout.Width - 140, 29);
+    public override IntRect OptionsBackRect(ScreenLayout layout) => new(16, layout.Height - 46, (layout.Width - 48) / 2, 29);
 
-    public override void RenderOptions(PixelCanvas canvas, ScreenLayout layout, UserSettings settings, Localizer t, int selected)
+    public override IntRect OptionsResetRect(ScreenLayout layout) =>
+        new(layout.Width / 2 + 8, layout.Height - 46, (layout.Width - 48) / 2, 29);
+
+    public override void RenderOptions(PixelCanvas canvas, ScreenLayout layout, UserSettings settings, Localizer t, int selected,
+        bool advanced = false, bool resetArmed = false, int frame = 0)
     {
         BeginFrame(canvas, layout);
+        DrawMenuStars(canvas, layout, frame);
         int w = layout.Width;
-        BitmapFont.Draw(canvas, t["menu.options"], w / 2, 22, Rgb.FromBytes(255, 220, 120), 3, TextAlign.Center, Rgb.FromBytes(60, 10, 30));
-        var entries = OptionsMenu.Entries(settings);
+        BitmapFont.Draw(canvas, t[advanced ? "menu.advanced" : "menu.options"], w / 2, layout.TopBelowCutout(OptionsTitleY), Rgb.FromBytes(255, 220, 120), 3, TextAlign.Center, Rgb.FromBytes(60, 10, 30));
+        var entries = OptionEntries(settings, advanced);
         var rows = OptionRowRects(layout, entries.Count);
         for (int i = 0; i < entries.Count; i++)
         {
-            var r = rows[i];
-            bool sel = i == selected;
-            if (sel) canvas.GlowRect(r.X, r.Y, r.Right - 1, r.Bottom - 1, P.P1.Scale(0.6f), 3, 1);
-            canvas.RoundedRect(r.X, r.Y, r.Right - 1, r.Bottom - 1, 6, sel ? Rgb.FromBytes(24, 50, 90) : Rgb.FromBytes(18, 20, 42),
-                sel ? P.P1 : Rgb.FromBytes(60, 70, 120));
-            BitmapFont.Draw(canvas, t[entries[i].LabelKey], r.X + 12, r.Y + 6, P.Dim);
-            if (entries[i].LabelKey == "opt.arena" && ArenaInfo.IsAnimated(settings.Arena))   // animierte Arenen kennzeichnen
-                BitmapFont.Draw(canvas, t["opt.arenaAnimated"], r.Right - 12, r.Y + 6, Rgb.FromBytes(255, 220, 120), align: TextAlign.Right);
-            int vy = r.Y + r.Height - 18;
-            BitmapFont.Draw(canvas, t[entries[i].ValueKey(settings)], w / 2, vy, sel ? P.Text : Rgb.FromBytes(200, 210, 235), 2, TextAlign.Center, P.Shadow);
-            var arrow = sel ? P.P1 : Rgb.FromBytes(90, 100, 150);
-            BitmapFont.Draw(canvas, "<", r.X + 14, vy, arrow, 2);
-            BitmapFont.Draw(canvas, ">", r.Right - 24, vy, arrow, 2);
+            string? mark = entries[i].LabelKey == "opt.arena" && ArenaInfo.IsAnimated(settings.Arena) ? t["opt.arenaAnimated"] : null;
+            DrawOptionRow(canvas, rows[i], t[entries[i].LabelKey], t[entries[i].ValueKey(settings)], i == selected, mark, last: i == entries.Count - 1);
         }
         Button(canvas, OptionsBackRect(layout), t["menu.back"], selected: false);
+        Button(canvas, OptionsResetRect(layout), t[resetArmed ? "menu.resetConfirm" : "menu.reset"], selected: resetArmed);
         Finish(canvas);
+    }
+
+    private static readonly Rgb RowFillSelected = Rgb.FromBytes(24, 50, 90);
+    private static readonly Rgb RowLine = Rgb.FromBytes(60, 70, 120), ArrowDim = Rgb.FromBytes(90, 100, 150);
+    private static readonly Rgb ValueColor = Rgb.FromBytes(200, 210, 235), MarkColor = Rgb.FromBytes(255, 220, 120);
+
+    /// <summary>
+    /// Optionszeile (Entwurf B, V1.1): keine Kaesten, Trennlinien zwischen den Zeilen. Beschriftung klein oben,
+    /// Wert in doppelter Schrift linksbuendig darunter; die gewaehlte Zeile ist hinterlegt und links markiert.
+    /// </summary>
+    private static void DrawOptionRow(PixelCanvas canvas, IntRect r, string label, string value, bool sel, string? mark = null,
+        bool last = false)
+    {
+        int valueH = BitmapFont.GlyphHeight * ValueScale;
+        if (sel)
+        {
+            canvas.BlendRect(r.X, r.Y, r.Right - 1, r.Bottom - 1, RowFillSelected, 0.8f);
+            canvas.FillRect(r.X, r.Y, r.X + 2, r.Bottom - 1, P.P1);
+        }
+        if (!last) canvas.FillRect(r.X + 6, r.Bottom + 1, r.Right - 7, r.Bottom + 1, RowLine);
+        BitmapFont.Draw(canvas, label, r.X + 10, r.Y + 4, P.Dim);
+        if (mark is not null) BitmapFont.Draw(canvas, mark, r.Right - 8, r.Y + 4, MarkColor, align: TextAlign.Right);
+        int vy = r.Bottom - 3 - valueH;
+        BitmapFont.Draw(canvas, value, r.X + 10, vy, sel ? P.Text : ValueColor, ValueScale, shadow: P.Shadow);
+        var arrow = sel ? P.P1 : ArrowDim;
+        Triangle(canvas, r.Right - 34, vy + valueH / 2, -1, 5, arrow);
+        Triangle(canvas, r.Right - 12, vy + valueH / 2, 1, 5, arrow);
+    }
+
+    /// <summary>Kleines gefuelltes Dreieck als Pfeil; <paramref name="direction"/> −1 = links, 1 = rechts.</summary>
+    private static void Triangle(PixelCanvas canvas, int x, int y, int direction, int size, Rgb color)
+    {
+        for (int i = 0; i < size; i++)
+        {
+            int col = x + direction * (i - size / 2);
+            int half = size - 1 - i;
+            canvas.FillRect(col, y - half, col, y + half, color);
+        }
     }
 }
 

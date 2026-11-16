@@ -11,9 +11,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Art\*.lzpx" LogicalName="LazerArena.Presentation.Art.%(Filename).lzpx" WithCulture="false" />
     <EmbeddedResource Include="Localization\Strings.*.json" LogicalName="LazerArena.Presentation.Localization.%(Filename).json" WithCulture="false" />
     <EmbeddedResource Include="Audio\Voice\de\*.wav" LogicalName="LazerArena.Presentation.Voice.de.%(Filename).wav" WithCulture="false" />
     <EmbeddedResource Include="Audio\Voice\en\*.wav" LogicalName="LazerArena.Presentation.Voice.en.%(Filename).wav" WithCulture="false" />
+    <EmbeddedResource Include="Audio\Voice\soft\de\*.wav" LogicalName="LazerArena.Presentation.Voice.soft.de.%(Filename).wav" WithCulture="false" />
+    <EmbeddedResource Include="Audio\Voice\soft\en\*.wav" LogicalName="LazerArena.Presentation.Voice.soft.en.%(Filename).wav" WithCulture="false" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,3 +1,4 @@
+using LazerArena.Presentation.Settings;
 using LazerArena.Core;
 using LazerArena.Presentation.Audio;
 
@@ -13,18 +14,28 @@ public class AudioTests
     [Fact, Trait("Regel", "F5")]
     public void JedesSpielereignisHatEinenKlang()
     {
-        foreach (var type in Enum.GetValues<GameEventType>().Where(t => t != GameEventType.RoundStarted))
+        foreach (var type in Enum.GetValues<GameEventType>())
             Assert.NotNull(SoundEvents.For(new GameEvent(type)));
     }
 
     [Fact, Trait("Regel", "RS-4")]
-    public void RS4_CountdownZweiGleichePieptoeneUndEinEtwasHoeherer()
+    public void RS4_DreiGleichePieptoeneUndEinHoehererTonBeiGo()
     {
         Assert.Equal(SoundId.Countdown, SoundEvents.For(new GameEvent(GameEventType.CountdownStarted)));
         Assert.Equal(SoundId.Countdown, SoundEvents.For(new GameEvent(GameEventType.CountdownTwo)));
-        Assert.Equal(SoundId.CountdownHigh, SoundEvents.For(new GameEvent(GameEventType.CountdownOne)));
-        Assert.Null(SoundEvents.For(new GameEvent(GameEventType.RoundStarted)));
-        Assert.True(ClassicSoundBank.Script(SoundId.CountdownHigh)[0].Divider < ClassicSoundBank.Script(SoundId.Countdown)[0].Divider);
+        Assert.Equal(SoundId.Countdown, SoundEvents.For(new GameEvent(GameEventType.CountdownOne)));
+        Assert.Equal(SoundId.RoundStart, SoundEvents.For(new GameEvent(GameEventType.RoundStarted)));
+        Assert.True(ClassicSoundBank.Script(SoundId.RoundStart)[0].Divider < ClassicSoundBank.Script(SoundId.Countdown)[0].Divider);
+        Assert.True(ClassicSoundBank.Script(SoundId.RoundStart).Count > ClassicSoundBank.Script(SoundId.Countdown).Count);
+        var modern = new ModernSoundBank();
+        Assert.True(ZeroCrossingsPerSample(modern.Get(SoundId.RoundStart).Samples) > 1.5 * ZeroCrossingsPerSample(modern.Get(SoundId.Countdown).Samples));
+    }
+
+    private static double ZeroCrossingsPerSample(short[] s)
+    {
+        int crossings = 0;
+        for (int i = 1; i < s.Length; i++) if ((s[i - 1] < 0) != (s[i] < 0)) crossings++;
+        return crossings / (double)s.Length;
     }
 
     [Fact, Trait("Regel", "LG-2")]
@@ -124,14 +135,16 @@ public class AudioTests
 public class VoiceTests
 {
     [Theory, Trait("Regel", "OP-13")]
-    [InlineData("de")]
-    [InlineData("en")]
-    public void OP13_AlleAnsagenSindInBeidenSprachenVorhanden(string language)
+    [InlineData(VoiceKind.Computer, "de")]
+    [InlineData(VoiceKind.Computer, "en")]
+    [InlineData(VoiceKind.Soft, "de")]
+    [InlineData(VoiceKind.Soft, "en")]
+    public void OP13_AlleAnsagenSindJeStimmeInBeidenSprachenVorhanden(VoiceKind voice, string language)
     {
         foreach (var line in Enum.GetValues<VoiceLine>())
         {
-            var clip = VoiceBank.Get(language, line);
-            Assert.InRange(clip.DurationSeconds, 0.2f, 1.5f);
+            var clip = VoiceBank.Get(voice, language, line);
+            Assert.InRange(clip.DurationSeconds, 0.2f, line == VoiceLine.Advanced ? 3.5f : 1.5f);
             Assert.True(clip.Samples.Max(s => Math.Abs((int)s)) > 10000, $"{language}/{line} zu leise");
         }
     }
@@ -143,6 +156,9 @@ public class VoiceTests
         Assert.Equal(VoiceLine.Three, three.Voice);
         Assert.True(three.VoiceReplacesSound);
         Assert.Equal(VoiceLine.One, AudioCue.From(new GameEvent(GameEventType.CountdownOne)).Voice);
+        var go = AudioCue.From(new GameEvent(GameEventType.RoundStarted));
+        Assert.Equal(VoiceLine.Go, go.Voice);
+        Assert.True(go.VoiceReplacesSound);
         var hit = AudioCue.From(new GameEvent(GameEventType.PlayerHit));
         Assert.Equal(VoiceLine.Hit, hit.Voice);
         Assert.False(hit.VoiceReplacesSound);
@@ -152,9 +168,16 @@ public class VoiceTests
     }
 
     [Fact, Trait("Regel", "OP-13")]
-    public void OP13_StimmeIstAbschaltbar_InBeidenStilen()
+    public void OP13_StimmeIstWaehlbarUndAbschaltbar_InBeidenStilen()
     {
-        Assert.True(new LazerArena.Presentation.Settings.UserSettings().Voice);
+        Assert.Equal(VoiceKind.Computer, new LazerArena.Presentation.Settings.UserSettings().VoiceStyle);
+        Assert.False(new LazerArena.Presentation.Settings.UserSettings { VoiceStyle = VoiceKind.Off }.Voice);
+        var entry = LazerArena.Presentation.Rendering.OptionsMenu.Entries(new LazerArena.Presentation.Settings.UserSettings())
+            .Single(e => e.LabelKey == "opt.voice");
+        var s = new LazerArena.Presentation.Settings.UserSettings();
+        var keys = new List<string>();
+        for (int i = 0; i < 3; i++) { keys.Add(entry.ValueKey(s)); s = entry.Step(s, 1); }
+        Assert.Equal(["val.voiceComputer", "val.voiceSoft", "val.off"], keys);
         foreach (var style in new[] { LazerArena.Presentation.Settings.GraphicsStyle.Classic, LazerArena.Presentation.Settings.GraphicsStyle.Modern })
             Assert.Contains(LazerArena.Presentation.Rendering.OptionsMenu.Entries(new LazerArena.Presentation.Settings.UserSettings { Style = style }),
                 e => e.LabelKey == "opt.voice");

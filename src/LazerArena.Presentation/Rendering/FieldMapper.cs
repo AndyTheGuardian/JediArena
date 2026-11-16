@@ -85,12 +85,15 @@ public static class Zigzag
     }
 
     /// <summary>Zickzack entlang eines Pfads mit Knicken.</summary>
-    public static List<Vector2> Along(IReadOnlyList<Vector2> path, float step, float amplitude, int seed)
+    /// <param name="irregular">OP-14: unregelmaessig zuckend (Standard) oder gleichmaessiges Zickzack wie in den ersten Versionen.</param>
+    public static List<Vector2> Along(IReadOnlyList<Vector2> path, float step, float amplitude, int seed, bool irregular = true)
     {
         var result = new List<Vector2>();
         for (int i = 1; i < path.Count; i++)
         {
-            var part = Irregular(path[i - 1], path[i], step, amplitude, seed + i * 7919);
+            var part = irregular
+                ? Irregular(path[i - 1], path[i], step, amplitude, seed + i * 7919)
+                : Between(path[i - 1], path[i], step, amplitude, seed + i * 7919);
             if (result.Count > 0) part.RemoveAt(0);
             result.AddRange(part);
         }

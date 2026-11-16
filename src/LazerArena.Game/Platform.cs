@@ -8,7 +8,26 @@ public interface IPlatformServices
 {
     string SettingsPath { get; }
     string ScreenshotDirectory { get; }
+    /// <summary>SO-7: Kamera-Aussparung oben in der aktuellen Ausrichtung (Geraetepixel; Hoehe 0 = keine).</summary>
+    Cutout Cutout => default;
     void Quit();
+}
+
+/// <summary>
+/// Kamera-Aussparung am oberen Rand: <paramref name="Top"/> = Hoehe in Geraetepixeln, <paramref name="Centered"/> = liegt
+/// sie mittig? Nur mittige Aussparungen werden ueberzeichnet (dort ist die obere Leiste frei); sonst beginnt das Bild darunter.
+/// </summary>
+public readonly record struct Cutout(int Top, bool Centered)
+{
+    /// <summary>So viele Geraetepixel bleiben oben frei (nicht mittige Aussparung).</summary>
+    public int Reserved => Centered ? 0 : Top;
+
+    /// <summary>So weit reicht eine ueberzeichnete Aussparung ins Bild.</summary>
+    public int Overdrawn => Centered ? Top : 0;
+
+    /// <summary>Mittig heisst: alle Aussparungen am oberen Rand liegen in den mittleren 40 % der Breite.</summary>
+    public static bool IsCentered(int screenWidth, IEnumerable<(int Left, int Right)> topCutouts) =>
+        topCutouts.All(c => c.Left >= screenWidth * 0.3f && c.Right <= screenWidth * 0.7f);
 }
 
 public enum PointerPhase { Down, Move, Up }

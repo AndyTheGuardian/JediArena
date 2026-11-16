@@ -7,7 +7,8 @@ using LazerArena.Presentation.Rendering;
 using LazerArena.Presentation.Settings;
 
 // Rendert repraesentative Bildschirme beider Stile als PNG (Vergleich mit den abgenommenen Mockups).
-// Aufruf: dotnet run --project tools/LazerArena.Snapshots -- <ausgabeordner> [de|en]
+// Aufruf: dotnet run --project tools/LazerArena.Snapshots -- <ausgabeordner> [de|en] [--arenen] [--anleitung [--ohne-bildfolge]]
+//         [--frames <arena> <anzahl> [jedes-n-te]] [--audio]
 string outDir = args.Length > 0 ? args[0] : "snapshots";
 if (args.Contains("--audio"))
 {
@@ -32,6 +33,32 @@ string language = args.Length > 1 ? args[1] : LanguageResolver.German;
 Directory.CreateDirectory(outDir);
 var t = new Localizer(language);
 const int phoneW = 1080, phoneH = 2340;
+if (args.Contains("--frames"))   // Bildfolge fuer eine Animationsvorschau: --frames <arena> <anzahl>
+{
+    int at = Array.IndexOf(args, "--frames");
+    var arena = Enum.Parse<ArenaKind>(args[at + 1]);
+    int count = int.Parse(args[at + 2]);
+    int every = args.Length > at + 3 && int.TryParse(args[at + 3], out int e) ? e : 1;   // nur jedes n-te Bild speichern
+    var renderer = new ModernRenderer(arena);
+    var settings = new UserSettings { Style = GraphicsStyle.Modern, Arena = arena };
+    var session = new GameSession(settings, true, seed: 4, GameConfig.Default with { StormIntervalMin = 6, StormIntervalMax = 6 });
+    var a1 = new AiController(PlayerId.One, AiLevel.Medium, new SeededRandom(99));
+    var a2 = new AiController(PlayerId.Two, AiLevel.Medium, new SeededRandom(98));
+    int frame = 0;
+    void Step() { a1.Update(session.Simulation, 1f / 60); a2.Update(session.Simulation, 1f / 60); session.Update(1f / 60); frame++; }
+    while (session.Simulation.Storm.Phase != StormPhase.Warning && frame < 3600) Step();
+    // ab der Gewitterwarnung: Leuchten erst aus, dann an
+    var layout = ScreenLayout.Create(GraphicsStyle.Modern, phoneW, phoneH, GameConfig.Default.FieldAspect, true);
+    for (int i = 0; i < count; i++)
+    {
+        var canvas = new PixelCanvas(layout.Width, layout.Height);
+        renderer.RenderGame(canvas, layout, session, t, frame, settings);   // jedes Bild: die Leuchten laufen hoch/aus
+        if (i % every == 0) PngWriter.Write(canvas, Path.Combine(outDir, $"frame-{i / every:D4}.png"), scale: 1);
+        Step();
+    }
+    Console.WriteLine($"{count} Bilder in {outDir}");
+    return;
+}
 
 foreach (StyleRenderer renderer in new StyleRenderer[] { new ClassicRenderer(), new ModernRenderer() })
 {
@@ -51,6 +78,9 @@ foreach (StyleRenderer renderer in new StyleRenderer[] { new ClassicRenderer(), 
         var canvas = new PixelCanvas(layout.Width, layout.Height);
         renderer.RenderOptions(canvas, layout, settings with { ShieldShape = ShieldShape.Curved, Arena = ArenaKind.SpaceFlight }, t, 1);
         Save(canvas, layout, $"{prefix}-optionen-hoch");
+        canvas = new PixelCanvas(layout.Width, layout.Height);
+        renderer.RenderOptions(canvas, layout, settings, t, 2, advanced: true, resetArmed: true);
+        Save(canvas, layout, $"{prefix}-erweitert-hoch");
     }
 
     Game(renderer, settings, twoPlayers: false, landscape: false, seconds: 7.3f, name: $"{prefix}-1p-hoch");
@@ -73,6 +103,74 @@ if (args.Contains("--arenen"))
         Game(renderer, settings, false, false, 7.3f, $"arena-{arena}-1p-hoch");
         Game(renderer, settings, false, true, 9.1f, $"arena-{arena}-1p-quer");
         Game(renderer, settings, true, false, 0, $"arena-{arena}-2p-hoch-gewitter", stormFrame: true);
+        if (arena == ArenaKind.SpaceStation) Game(renderer, settings, false, false, 6f, $"arena-{arena}-1p-hoch-pause", paused: true);
+    }
+}
+if (args.Contains("--anleitung"))   // Anleitung: Bildfolge je Stil und Seite fuer GIF-Vorschauen
+{
+    foreach (StyleRenderer renderer in new StyleRenderer[] { new ClassicRenderer(), new ModernRenderer() })
+    {
+        string prefix = renderer.Style == GraphicsStyle.Classic ? "klassisch" : "modern";
+        var layout = Layout(renderer.Style, false, false);
+        Directory.CreateDirectory(Path.Combine(outDir, "anleitung"));
+        for (int page = 0; page < StyleRenderer.TutorialPages && !args.Contains("--ohne-bildfolge"); page++)
+            for (int f = 0; f < StyleRenderer.TutorialLoopFrames; f += 4)
+            {
+                var canvas = new PixelCanvas(layout.Width, layout.Height);
+                renderer.RenderTutorial(canvas, layout, page, t, f);
+                PngWriter.Write(canvas, Path.Combine(outDir, "anleitung", $"{prefix}-{page}-{f:D3}.png"), scale: renderer.Style == GraphicsStyle.Classic ? 2 : 1);
+            }
+        var still = new PixelCanvas(layout.Width, layout.Height);
+        renderer.RenderTutorial(still, layout, 1, t, 100);
+        Save(still, layout, $"anleitung-{prefix}-hoch");
+        var land = Layout(renderer.Style, true, false);
+        var c2 = new PixelCanvas(land.Width, land.Height);
+        renderer.RenderTutorial(c2, land, 2, t, 120);
+        Save(c2, land, $"anleitung-{prefix}-quer");
+    }
+}
+if (args.Contains("--aussparung"))   // SO-7: Bildschirme mit simulierter mittiger Kamera-Aussparung auf mehreren Bildschirmgroessen
+{
+    var phones = new (string Name, int W, int H, int Hole)[]
+    {
+        ("1080x2340", 1080, 2340, 96), ("1220x2712", 1220, 2712, 110), ("1440x3200", 1440, 3200, 130),
+        ("720x1600", 720, 1600, 70), ("1080x1920", 1080, 1920, 0),
+    };
+    foreach (StyleRenderer renderer in new StyleRenderer[] { new ClassicRenderer(), new ModernRenderer() })
+    {
+        string prefix = renderer.Style == GraphicsStyle.Classic ? "klassisch" : "modern";
+        var settings = new UserSettings { Style = renderer.Style };
+        foreach (var (name, pw, ph, hole) in phones)
+        {
+            var layout = ScreenLayout.Create(renderer.Style, pw, ph, GameConfig.Default.FieldAspect, false);
+            layout = layout with { SafeTop = ScreenLayout.ToLogical(hole, ph, layout.Height) };
+            void Hole(PixelCanvas c)   // Kamera-Loch als schwarzer Kreis
+            {
+                if (hole == 0) return;
+                float r = layout.SafeTop * 0.42f;
+                c.FillEllipse(layout.Width / 2f, layout.SafeTop / 2f, r, r, Rgb.FromBytes(0, 0, 0));
+            }
+            var shots = new (string Shot, Action<PixelCanvas> Draw)[]
+            {
+                ("titel", c => renderer.RenderTitle(c, layout, settings, t, 0)),
+                ("optionen", c => renderer.RenderOptions(c, layout, settings, t, 1)),
+                ("erweitert", c => renderer.RenderOptions(c, layout, settings, t, 1, advanced: true)),
+                ("anleitung", c => renderer.RenderTutorial(c, layout, 1, t, 100)),
+                ("spiel", c =>
+                {
+                    var session = new GameSession(settings, false, seed: 4);
+                    for (int i = 0; i < 300; i++) session.Update(1f / 60);
+                    renderer.RenderGame(c, layout, session, t, 300, settings);
+                }),
+            };
+            foreach (var (shot, draw) in shots)
+            {
+                var canvas = new PixelCanvas(layout.Width, layout.Height);
+                draw(canvas);
+                Hole(canvas);
+                PngWriter.Write(canvas, Path.Combine(outDir, $"loch-{prefix}-{name}-{shot}.png"), scale: renderer.Style == GraphicsStyle.Classic ? 2 : 1);
+            }
+        }
     }
 }
 Console.WriteLine($"Fertig: {outDir}");
@@ -100,7 +198,7 @@ void Game(StyleRenderer renderer, UserSettings settings, bool twoPlayers, bool l
     var layout = ScreenLayout.Create(renderer.Style, landscape ? phoneH : phoneW, landscape ? phoneW : phoneH,
         session.Simulation.Config.FieldAspect, twoPlayers);
     var canvas = new PixelCanvas(layout.Width, layout.Height);
-    renderer.RenderGame(canvas, layout, session, t, (int)(time * 60));
+    renderer.RenderGame(canvas, layout, session, t, (int)(time * 60), settings);
     Save(canvas, layout, name);
 }
 

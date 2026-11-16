@@ -5,7 +5,7 @@ namespace LazerArena.Presentation.Audio;
 public enum SoundId
 {
     Fire, ThrowBack, Dock, DockLoop, Fizzle, ShieldHit, ShieldRegrow, PlayerHit,
-    StormWarning, StormStart, StormEnd, Countdown, CountdownHigh, RoundStart, MatchWon, MatchLost, MenuClick,
+    StormWarning, StormStart, StormEnd, Countdown, RoundStart, MatchWon, MatchLost, MenuClick,
 }
 
 /// <summary>Mono-PCM, 16 Bit.</summary>
@@ -49,8 +49,8 @@ public static class SoundEvents
         GameEventType.StormEnded => SoundId.StormEnd,
         GameEventType.CountdownStarted => SoundId.Countdown,      // „3“
         GameEventType.CountdownTwo => SoundId.Countdown,          // „2“
-        GameEventType.CountdownOne => SoundId.CountdownHigh,      // „1“: etwas hoeher
-        GameEventType.RoundStarted => null,                       // Start ohne eigenen Ton (die drei Pieptoene genuegen)
+        GameEventType.CountdownOne => SoundId.Countdown,          // „1“: gleicher Piepton (RS-4)
+        GameEventType.RoundStarted => SoundId.RoundStart,         // „GO!“: hoeherer, laengerer Ton (RS-4)
         GameEventType.MatchWon => SoundId.MatchWon,
         _ => null,
     };

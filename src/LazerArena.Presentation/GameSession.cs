@@ -17,11 +17,19 @@ public sealed class GameSession
         if (!twoPlayers)
             _ai = new AiController(PlayerId.Two, settings.AiLevel, new SeededRandom(seed ^ 0x5EED));
         AiLevel = settings.AiLevel;
+        Bolts = settings.Bolts;
+        Look = settings.Advanced;
     }
 
     public ArenaSimulation Simulation { get; }
     public bool TwoPlayers { get; }
     public AiLevel AiLevel { get; }
+
+    /// <summary>OP-14: Blitzform des Grafikstils, mit dem die Partie gestartet wurde.</summary>
+    public BoltShape Bolts { get; }
+
+    /// <summary>OP-15: Feineinstellungen der Darstellung (Leuchten).</summary>
+    public AdvancedSettings Look { get; }
 
     /// <summary>Gesammelte Ereignisse seit dem letzten Abholen (fuer Ton).</summary>
     public List<GameEvent> PendingEvents { get; } = [];
